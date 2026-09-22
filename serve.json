@@ -1,0 +1,25 @@
+{
+  "cleanUrls": false,
+  "rewrites": [
+    {
+      "source": "/room",
+      "destination": "/p2p.html"
+    },
+    {
+      "source": "/room/",
+      "destination": "/p2p.html"
+    }
+  ],
+  "redirects": [
+    {
+      "source": "/p2p.html",
+      "destination": "/room",
+      "type": 302
+    },
+    {
+      "source": "/p2p",
+      "destination": "/room",
+      "type": 302
+    }
+  ]
+}

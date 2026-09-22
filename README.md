@@ -1,0 +1,143 @@
+<p align="center">
+  <a href="https://swarmllm.ai"><img src="favicon.svg" width="72" alt="SwarmLLM"></a>
+</p>
+<h1 align="center">SwarmLLM</h1>
+<p align="center"><b>Every device brings a slice. Together they run the whole model.</b></p>
+<p align="center">
+  <a href="https://swarmllm.ai">Site</a> ·
+  <a href="https://swarmllm.ai/room">Start a swarm</a> ·
+  <a href="docs/architecture.md">Architecture</a> ·
+  <a href="docs/bench-log.md">Benchmarks</a> ·
+  <a href="roadmap/">Roadmap</a> ·
+  <a href="SECURITY.md">Threat model</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
+<p align="center">
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-2b4eff">
+  <img alt="runtime" src="https://img.shields.io/badge/runs%20on-WebGPU%20%2B%20WebRTC-16171c">
+</p>
+
+https://github.com/user-attachments/assets/4f349e4b-c699-45da-abe8-e9162689293e
+
+<p align="center"><sub>Demo, recorded September 7, 2026: Qwen 3.8 27B across a MacBook and an iPhone in browser tabs, same Wi‑Fi, 400 tokens at 10.7 tok/s. <a href="https://github.com/Nehanth/swarmllm/releases/download/v0.2.0/swarmllm-demo-2026-09-07.mp4">Download</a>.</sub></p>
+
+SwarmLLM runs large language models across the devices in a room, in their browser tabs. Each device holds a slice of the model; a 10 KB activation vector passes between them over direct WebRTC connections. Nothing to install, no accounts, no server does any thinking.
+
+- **27B in browser tabs.** Qwen 3.8 27B (15 GB of Q4_0 weights) across laptops, phones and PCs that individually can't hold it.
+- **Native-competitive decode.** A from-scratch WebGPU engine (~50 WGSL kernels) at the memory roofline: 9.0 tok/s plain and 16 tok/s with speculative decoding on a GB10, where native llama.cpp measures 8.0 on the same file and GPU. ([bench log](docs/bench-log.md))
+- **Bit-exact by construction.** Every optimization is gated on golden tests; the speculative path produces the same stream as plain decoding.
+- **Cross-network.** Rooms span networks via WebRTC; prefill sends 16 tokens per round trip and decode chains speculative drafts so a slow link still moves several tokens per lap.
+- **Nothing leaves the room.** A room is a shared conversation: everyone in it sees the questions and answers, by design. No server ever sees them, and the devices running layers work on mid-model activations, which are *not* private against a determined peer either (see [SECURITY.md](SECURITY.md)).
+
+## Quick start
+
+**Use it:** open [swarmllm.ai/room](https://swarmllm.ai/room), create a room, share the code, pick a model, start. Every device downloads only its layers (cached for next time).
+
+**Run it locally:**
+
+```bash
+git clone https://github.com/AllenJohnn/llm && cd llm
+npx -y serve -l 8080 .        # any static server works; then open http://localhost:8080/room
+```
+
+**Hack on the engine** (needs [Deno](https://deno.com) 2.x and a WebGPU-capable GPU; model files go under `models/`, see [docs/models.md](docs/models.md)):
+
+```bash
+npm test              # unit tests, no GPU
+npm run test:gpu      # golden tests on Qwen3 0.6B
+npm run test:q38      # 27B suites incl. speculative-vs-plain equality
+npm run bench:q38     # decode / prefill tok/s
+```
+
+## How it works
+
+```
+host      embed the last token → hidden state (5,120 floats)
+   ↓ 10 KB over WebRTC
+peer A    layers 0–21           ─┐
+peer B    layers 22–42           ├─ each device runs its slice on its own GPU
+peer C    layers 43–63          ─┘
+   ↓ back to the host
+host      final norm → LM head → sample → next token (and the draft head guesses the one after)
+```
+
+Generating a token is memory-bound: every token reads all of the weights once. So the engine's job is reading fewer bytes (4-bit blocks with f16 scales) and reading them well (64 threads sweep each row together, dequantize in registers, reduce in shared memory), with one command submit per token. The runtime's job is making network laps carry more: batched prefill, and multi-token-prediction speculation verified in a single batched pass with exact rollback of the recurrent state. Details: [docs/architecture.md](docs/architecture.md), [docs/kernels.md](docs/kernels.md), [docs/protocol.md](docs/protocol.md).
+
+## How it compares
+
+Other projects split or share models across machines. The differences are what has to be installed and where the model runs.
+
+| | Model per device | Devices | Install | Network |
+|---|---|---|---|---|
+| **SwarmLLM** | a slice of layers | laptops and phones, any OS with a WebGPU browser | none, open a URL | same Wi‑Fi or across the internet (WebRTC) |
+| exo | a slice of layers | machines that run Python and MLX or tinygrad | Python package per node | one network |
+| llama.cpp `rpc-server` | a slice of layers | machines that run the binary | binary and an open port per node; the docs say not for untrusted networks | LAN in practice |
+| Petals | a slice of layers | server GPUs in a public swarm | Python client and server | internet, public swarm |
+| distributed-llama | a slice of layers | Linux boxes and Raspberry Pis | binary per node | LAN |
+| WebLLM / MLC, transformers.js | the whole model | one browser tab | none | none needed |
+| Ollama, llmman | the whole model | one machine per request | native app | routing between machines, no splitting |
+
+The engine underneath is our own WGSL, not WebLLM, MLC or llama.cpp; the model weights and tokenizer come from Qwen, hosting from Hugging Face, and signaling only from PeerJS.
+
+## Supported models
+
+| Model | Format | Notes |
+|---|---|---|
+| Qwen 3.8 27B | GGUF Q4_0 | hybrid Gated-DeltaNet + attention; MTP speculation |
+| Qwen3 0.6B / 1.7B / 4B | GGUF Q8_0 / Q4_0 | dense; used for golden tests |
+| SmolLM2 135M | safetensors f32 | smallest demo |
+
+Browsers: Chrome on macOS is the tested host. Safari on an iPhone joins a room and holds a small slice; Safari on a Mac reloads the tab under memory pressure when it holds the 27B's large slice, so do not host from it. Firefox and Linux Chromium need WebGPU enabled and are untested by us. Headless: Deno 2 (wgpu). See [docs/models.md](docs/models.md).
+
+## Performance
+
+Qwen 3.8 27B Q4_0, greedy, bit-identical output at every row. Full history with commits in [docs/bench-log.md](docs/bench-log.md).
+
+| Device | Decode plain | Decode speculative | Prefill | Native llama.cpp, same GGUF, same machine |
+|---|---|---|---|---|
+| NVIDIA GB10 (Deno / Vulkan, headless) | 9.0 tok/s | 16.1 tok/s | 44 tok/s | 8.0 decode (tg32), 377 prefill (pp86), CUDA build 749f688 |
+| MacBook Pro (Chrome / Metal), solo | 6.7 tok/s | 10.8 tok/s | ~20 tok/s | — |
+| MacBook Pro + iPhone, same Wi‑Fi, 62 + 2 layers | — | 7.7 tok/s | 8.5 s for a 169-token prompt | — |
+| Cross-internet room (host + peer) | — | 3.5–6 tok/s | — | — |
+
+Decode on the GB10 runs at the memory bandwidth a WebGPU buffer read can reach on that machine (183 of 184 GB/s measured), which is why it is ahead of the native build there. Prefill is the known gap: the DeltaNet recurrence is serial and the prefill GEMM is young. One token's hidden state on the wire is 10 KB (5,120 × f16).
+
+## Repository layout
+
+```
+engine/            the runtime (ES modules; engine.js re-exports the public API)
+  dense.js         DenseEngine: dense Llama-architecture models (Qwen3, SmolLM)
+  qwen35.js        Qwen35Engine: hybrid Gated-DeltaNet + attention, batched paths, MTP speculation
+  gguf.js          GGUF parsing, quantization repacking, streaming upload
+  wgsl/            base.js (shared kernels) · coop.js (generated GEMV family) · qwen35.js (DeltaNet kernels)
+  tokenizer.js · sampling.js · quant.js · autotune.js · selftest.js · safetensors.js
+room.js + room/    the room: signaling, mesh, weight streaming, generation loop; wire/markdown/sampling/models helpers
+index.html         landing page          p2p.html   the room's markup (served at /room)
+tests/             GPU golden tests · unit/ (no GPU) · golden/ · reference/ · run.sh
+benchmarks/        tok/s harnesses, kernel-family profiler, GEMM prototype
+docs/              architecture · tech-stack · kernels (every trick, measured) · protocol · models · bench log · research · agents (rules for automated contributors)
+roadmap/           one file per planned item with status, design and done-criteria
+```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [GOVERNANCE.md](GOVERNANCE.md). Benchmark reports from hardware we don't have are especially welcome (there's an issue template).
+
+## Citation
+
+```bibtex
+@software{swarmllm2026,
+  author = {John, Allen},
+  title  = {SwarmLLM: peer-to-peer LLM inference across browser tabs},
+  year   = {2026},
+  url    = {https://github.com/AllenJohnn/llm}
+}
+```
+
+## Acknowledgements
+
+Model weights and the GGUF format come from the [Qwen](https://huggingface.co/Qwen) team and [llama.cpp / ggml](https://github.com/ggml-org/llama.cpp), whose speculative-decoding graph for Qwen 3.5/3.8 was the reference for ours. Prior work that shaped this: [Petals](https://github.com/bigscience-workshop/petals), [exo](https://github.com/exo-explore/exo), [WebLLM](https://github.com/mlc-ai/web-llm), [LlamaWeb](https://arxiv.org/abs/2605.20706), and the Gated DeltaNet and PipeInfer papers.
+
+## License
+
+[MIT](LICENSE).

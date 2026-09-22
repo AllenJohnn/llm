@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<title>SwarmLLM · room</title>
+<script src="/vendor/peerjs.min.js"></script>
+<script>
+if (typeof Peer === "undefined") {
+  document.write('<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"><\/script>');
+}
+
+window.addEventListener('error', function(e) {
+  console.error('Global error:', e);
+  var s = document.getElementById('join-status');
+  if (s) {
+    s.style.color = 'var(--err, #d1242f)';
+    var t = e.target;
+    if (t && (t.tagName === 'SCRIPT' || t.tagName === 'LINK')) {
+      s.textContent = 'Resource failed to load: ' + (t.src || t.href);
+    } else {
+      var msg = e.message || (e.error ? e.error.message : String(e));
+      s.textContent = 'Error: ' + msg + (e.filename ? ' (' + e.filename.split('/').pop() + ':' + e.lineno + ')' : '');
+    }
+  }
+}, true);
+
+window.addEventListener('unhandledrejection', function(e) {
+  console.error('Unhandled rejection:', e);
+  var s = document.getElementById('join-status');
+  if (s) {
+    s.style.color = 'var(--err, #d1242f)';
+    s.textContent = 'Rejection: ' + (e.reason ? (e.reason.message || e.reason) : e);
+  }
+});
+
+if (location.protocol === 'file:') {
+  window.addEventListener('DOMContentLoaded', function() {
+    var s = document.getElementById('join-status');
+    if (s) {
+      s.style.color = 'var(--err, #d1242f)';
+      s.innerHTML = '⚠️ <b>Notice:</b> Browsers block WebRTC &amp; ES modules on <code>file://</code>.<br>Please open via your local server: <a href="http://localhost:8080/room" style="color:var(--accent)">http://localhost:8080/room</a>';
+    }
+  });
+}
+
+window.stepGB = function(d) {
+  var i = document.getElementById("join-gb");
+  if (!i) return;
+  var lo = parseFloat(i.min) || 1;
+  var st = parseFloat(i.step) || 1;
+  var cur = parseFloat(i.value) || lo;
+  i.value = Math.min(64, Math.max(lo, cur + d * st));
+};
+
+window.swarmStart = function(create) {
+  if (window.__roomStart) {
+    window.__roomStart(create);
+  } else {
+    var s = document.getElementById('join-status');
+    if (s) s.textContent = 'Loading SwarmLLM engine… please click again in a moment';
+  }
+};
+</script>
+<style>
+  :root {
+    --bg: #f5f4ee;
+    --panel: #fbfaf5;
+    --panel-2: #efede6;
+    --border: #e1ded2;
+    --text: #16171c;
+    --muted: #8b877a;
+    --faint: #c4c0b1;
+    --accent: #2b4eff;
+    --accent-dim: #2b4eff;
+    --user-bubble: #e2e7fd;
+    --ok: #1a7f37;
+    --warn: #b58500;
+    --err: #d1242f;
+    --sans: "Space Grotesk", -apple-system, BlinkMacSystemFont, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    background-image: radial-gradient(var(--border) 1px, transparent 1px);
+    background-size: 26px 26px;
+    color: var(--text);
+    font: 15px/1.55 var(--sans);
+    display: flex; flex-direction: column;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--accent); color: #fff; }
+
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 16px max(20px, 3vw);
+    padding-top: max(16px, env(safe-area-inset-top));
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--bg) 85%, transparent);
+    backdrop-filter: blur(10px);
+  }
+  .logo { font-size: 19px; font-weight: 700; letter-spacing: -0.02em; }
+  .logo span { color: var(--accent); }
+  .logo a { color: inherit; text-decoration: none; }
+  .tagline { font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em; color: var(--muted); text-transform: uppercase; }
+  .spacer { flex: 1; }
+  #room-badge {
+    display: none; font-family: var(--mono); font-size: 14px;
+    background: var(--text); color: var(--bg);
+    border: none; border-radius: 100px; padding: 8px 18px;
+    letter-spacing: 4px; font-weight: 500; cursor: pointer;
+    transition: all 0.25s;
+  }
+  #room-badge:hover { background: var(--accent); }
+  #gh-link { display: inline-flex; align-items: center; color: var(--muted); margin-left: 14px; transition: color 0.2s; }
+  #gh-link:hover { color: var(--ink); }
+
+  button, input, select {
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 12px;
+    padding: 10px 16px; font-size: 14px; font-family: var(--sans);
+  }
+  button { cursor: pointer; transition: all 0.25s cubic-bezier(0.2,0.8,0.2,1); }
+  button:hover:not(:disabled) { border-color: var(--text); transform: translateY(-1px); }
+  button:disabled { opacity: 0.45; cursor: default; transform: none; }
+  button.primary {
+    background: var(--text); color: var(--bg); border-color: var(--text);
+    font-family: var(--mono); font-size: 13px; border-radius: 100px; padding: 11px 22px;
+  }
+  button.primary:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); box-shadow: 0 8px 26px rgba(43,78,255,0.3); }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+
+  /* ---- join screen ---- */
+  #join-screen {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 16px; padding: 24px;
+  }
+  .kicker {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.22em;
+    color: var(--muted);
+  }
+  #join-screen h1 { font-size: clamp(32px, 5vw, 46px); font-weight: 700; letter-spacing: -0.03em; }
+  #join-screen h1 span { color: var(--accent); }
+  #join-screen p { color: var(--muted); font-size: 14px; text-align: center; max-width: 360px; margin-bottom: 8px; }
+  #join-screen input { width: 280px; text-align: center; padding: 13px 16px; }
+  #code-input { font-family: var(--mono); letter-spacing: 6px; text-transform: uppercase; font-weight: 500; }
+  .join-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  #join-status { font-family: var(--mono); font-size: 12px; color: var(--warn); min-height: 18px; max-width: 420px; text-align: center; }
+  #contrib-box {
+    border: 1px solid var(--border); border-radius: 16px;
+    background: var(--panel); padding: 16px 20px; margin-top: 4px;
+  }
+  #contrib-box label { font-size: 13px; color: var(--muted); }
+  #contrib-box label b { color: var(--text); font-weight: 500; }
+  #contrib-box input[type="radio"] { accent-color: var(--accent); }
+  #measure-btn { font-family: var(--mono); font-size: 11px; padding: 6px 14px; border-radius: 100px; }
+  #join-pledge { display: flex; align-items: center; justify-content: center; gap: 8px; font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 2px; }
+  #join-pledge input { width: 64px; padding: 6px 8px; font-family: var(--mono); font-size: 12px; border-radius: 8px; text-align: center; }
+  #join-pledge .step { width: 30px; height: 30px; border-radius: 100px; padding: 0; font-family: var(--mono); font-size: 15px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+  #join-pledge input { width: 52px; padding: 6px 4px; -moz-appearance: textfield; }
+  #join-pledge input::-webkit-outer-spin-button, #join-pledge input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+  /* ---- room screen ---- */
+  #room-screen { flex: 1; display: none; flex-direction: column; overflow: hidden; }
+  #peers {
+    overflow-y: auto; padding: 18px max(20px, 3vw) 6px;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px;
+    align-content: start;
+  }
+  .peer-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 18px; padding: 16px 18px;
+    transition: all 0.3s cubic-bezier(0.2,0.8,0.2,1);
+  }
+  .peer-card:hover { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(20,21,26,0.06); }
+  .peer-card.self { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .peer-name { font-weight: 700; display: flex; align-items: center; gap: 9px; letter-spacing: -0.01em; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+  .dot.ok { background: var(--accent); box-shadow: 0 0 0 3px rgba(43,78,255,0.15); }
+  .dot.warn { background: var(--warn); }
+  .peer-gpu { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 8px; word-wrap: break-word; }
+  .peer-stats { font-family: var(--mono); font-size: 11px; margin-top: 10px; display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); }
+  .peer-stats b { color: var(--accent); font-weight: 500; }
+  .peer-card button { margin-top: 12px; font-family: var(--mono); font-size: 11px; padding: 6px 12px; border-radius: 100px; }
+  .host-section { border-top: 1px dashed var(--border); padding-top: 10px; margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+  .host-section[hidden] { display: none; }
+  .host-section label { font-family: var(--mono); font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+  .host-select { font-family: var(--mono); font-size: 11.5px; padding: 6px 10px; border-radius: 8px; width: 100%; }
+
+  /* ---- ai panel ---- */
+  #ai-panel {
+    display: none; flex-direction: column; gap: 12px;
+    margin: 10px max(20px, 3vw) 14px; padding: 18px 20px;
+    background: var(--panel);
+    border: 1px solid var(--border); border-radius: 20px;
+    box-shadow: 0 14px 44px rgba(20,21,26,0.07);
+  }
+  #ai-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  #ai-title {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em;
+    color: var(--muted); display: flex; align-items: center; gap: 8px;
+  }
+  #ai-title::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: blink 1.6s infinite; }
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+  #ai-model { font-family: var(--mono); font-size: 12.5px; border-radius: 100px; padding: 9px 16px; }
+  #ai-status { font-family: var(--mono); font-size: 11.5px; color: var(--muted); flex: 1; min-width: 160px; }
+  #ai-status:empty { display: none; }
+  #ai-need { width: 100%; display: flex; flex-direction: column; gap: 6px; }
+  /* panel states: pick -> loading -> online */
+  #ai-panel.loading #ai-model, #ai-panel.loading #ai-start, #ai-panel.loading #ai-need,
+  #ai-panel.online #ai-model, #ai-panel.online #ai-start, #ai-panel.online #ai-need { display: none; }
+  #need-bar { height: 6px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+  #need-fill { height: 100%; width: 0%; background: var(--muted); border-radius: 4px; transition: width 0.9s cubic-bezier(0.2,0.8,0.2,1), background 0.4s; }
+  #ai-need.ok #need-fill { background: var(--accent); }
+  #need-text { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  #cache-line a { color: var(--muted); text-decoration: underline dotted; }
+  #cache-line a:hover { color: var(--text); }
+  #ai-need.ok #need-text { color: var(--accent); }
+  @keyframes unlock { 0% { transform: scale(1); } 40% { transform: scale(1.04); } 100% { transform: scale(1); } }
+  #ai-start.unlocked { animation: unlock 0.5s cubic-bezier(0.2,0.8,0.2,1); }
+  #ai-loading { padding: 4px 0; }
+  #ldg-title { font-family: var(--mono); font-size: 11.5px; color: var(--text); margin-bottom: 8px; }
+  #ldg-bar { height: 7px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+  #ldg-fill {
+    height: 100%; width: 0%; border-radius: 4px; transition: width 0.25s;
+    background: linear-gradient(90deg, var(--accent), #7a94ff);
+  }
+  #ldg-sub { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 7px; }
+  #ai-output {
+    display: none; white-space: pre-wrap; word-wrap: break-word;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 14px;
+    padding: 14px 16px; font-size: 14px; max-height: 42vh; overflow-y: auto;
+    line-height: 1.65;
+  }
+  #ai-output .u { color: var(--accent); font-weight: 600; }
+  #ai-output .stats { font-family: var(--mono); color: var(--muted); font-size: 10.5px; }
+  #ai-row { display: none; gap: 10px; }
+  #ai-prompt { flex: 1; border-radius: 100px; padding: 11px 18px; }
+
+  /* ---- footer bars ---- */
+  #cluster-bar {
+    padding: 9px max(20px, 3vw);
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    border-top: 1px solid var(--border);
+  }
+  #cluster-bar b { color: var(--text); font-weight: 500; }
+  #chat-log {
+    max-height: 96px; overflow-y: auto; padding: 6px max(20px, 3vw);
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    border-top: 1px solid var(--border);
+  }
+  #chat-log b { color: var(--accent); font-weight: 500; }
+  #chat-row {
+    display: flex; gap: 10px; padding: 10px max(20px, 3vw);
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border);
+    background: color-mix(in srgb, var(--bg) 85%, transparent);
+  }
+  #chat-input { flex: 1; border-radius: 100px; padding: 10px 18px; font-size: 13px; }
+
+  /* ---- chat bubbles ---- */
+  #ai-output { display: none; background: var(--bg); border: 1px solid var(--border); border-radius: 16px; padding: 14px 16px; max-height: 46vh; overflow-y: auto; }
+  .m { display: flex; flex-direction: column; margin: 8px 0; max-width: 86%; }
+  .m.user { align-self: flex-end; align-items: flex-end; margin-left: auto; }
+  .m.bot { align-self: flex-start; align-items: flex-start; }
+  .m .who { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; }
+  .m .bubble { padding: 10px 14px; border-radius: 16px; font-size: 14.5px; line-height: 1.6; white-space: normal; word-wrap: break-word; }
+  .m.user .bubble { background: var(--text); color: var(--bg); border-bottom-right-radius: 5px; }
+  .m.bot .bubble { background: var(--panel); border: 1px solid var(--border); border-bottom-left-radius: 5px; }
+  .m .bubble h3, .m .bubble h4 { font-size: 15px; margin: 10px 0 4px; font-weight: 700; }
+  .m .bubble p { margin: 6px 0; }
+  .m .bubble ul, .m .bubble ol { margin: 6px 0 6px 18px; }
+  .m .bubble li { margin: 3px 0; }
+  .m .bubble code { font-family: var(--mono); font-size: 12.5px; background: var(--panel-2); padding: 1px 5px; border-radius: 5px; }
+  .m .bubble pre { font-family: var(--mono); font-size: 12px; background: var(--panel-2); padding: 10px 12px; border-radius: 10px; overflow-x: auto; margin: 8px 0; }
+  .m .stats { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 5px; }
+  .cursor { display: inline-block; width: 7px; height: 14px; background: var(--accent); vertical-align: -2px; margin-left: 2px; animation: blink 1s infinite; }
+  .pledge { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .pledge input { width: 62px; padding: 4px 8px; font-family: var(--mono); font-size: 11px; border-radius: 8px; text-align: center; }
+  #toasts { position: fixed; top: 74px; right: max(20px, 3vw); z-index: 60; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+  .toast { display: flex; align-items: center; gap: 9px; background: var(--text); color: var(--bg); font-family: var(--mono); font-size: 12px; padding: 10px 16px; border-radius: 100px; box-shadow: 0 10px 30px rgba(20,21,26,0.2); animation: toastin 0.45s cubic-bezier(0.2,0.8,0.2,1) both, toastout 0.4s ease-in 3.6s both; }
+  .toast::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+  @keyframes toastin { from { opacity: 0; transform: translateX(24px) scale(0.96); } to { opacity: 1; transform: none; } }
+  @keyframes toastout { to { opacity: 0; transform: translateY(-8px); } }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  /* ---- room: sidebar + chat ---- */
+  #room-screen { flex-direction: row; overflow: hidden; }
+  #side { width: 300px; flex: none; display: flex; flex-direction: column; gap: 10px; padding: 14px 14px 12px; border-right: 1px solid var(--border); overflow: hidden; min-height: 0; background: color-mix(in srgb, var(--panel) 70%, transparent); }
+  #side > #peers { flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: none; }
+  #side > #peers::-webkit-scrollbar { display: none; }
+  .side-k { font-family: var(--mono); font-size: 10px; letter-spacing: 0.2em; color: var(--muted); }
+  #side-room { padding: 10px 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  #side-room .side-k { flex-basis: 100%; }
+  #side-code { font-family: var(--mono); font-size: 26px; letter-spacing: 7px; font-weight: 500; color: var(--accent); margin: 0; cursor: pointer; }
+  .side-hint { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+  #peers { display: flex; flex-direction: column; gap: 10px; padding: 0; overflow: visible; }
+  .peer-card { padding: 9px 12px; border-radius: 12px; }
+  .peer-gpu { margin-top: 4px; }
+  .peer-stats { margin-top: 6px; }
+  .pledge { margin-top: 6px; }
+  #ai-panel { margin: 0; padding: 12px 12px 12px; gap: 8px; box-shadow: none; }
+  #ai-head { flex-direction: column; align-items: stretch; gap: 8px; }
+  #ai-title { display: none; }
+  #ai-model { width: 100%; }
+  #ai-status { min-width: 0; }
+  #ai-start { width: 100%; }
+  #cluster-bar { border-top: none; padding: 4px 2px; margin-top: auto; }
+  #chatpane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #chat-log { max-height: 60px; border-top: none; border-bottom: 1px solid var(--border); padding: 6px max(16px, 2vw); opacity: 0.8; }
+  #ai-empty { flex: 1; display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  #load-card { display: none; margin: auto; width: min(460px, 92%); padding: 22px 24px; background: var(--panel); border: 1px solid var(--border); border-radius: 20px; box-shadow: 0 14px 44px rgba(20,21,26,0.07); }
+  #load-card.on { display: block; }
+  .lc-k { font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em; color: var(--muted); display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+  .lc-k::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: blink 1.6s infinite; }
+  .lc-k span { color: var(--text); letter-spacing: 0; }
+  .lc-row { display: grid; grid-template-columns: 92px 1fr 44px; align-items: center; gap: 12px; margin: 10px 0; font-family: var(--mono); font-size: 12px; }
+  .lc-row .n { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lc-row .n small { color: var(--muted); display: block; font-size: 10px; }
+  .lc-row .bar { height: 6px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+  .lc-row .fill { height: 100%; width: 0%; background: var(--accent); border-radius: 4px; transition: width 0.6s ease; }
+  .lc-row .pct { text-align: right; color: var(--muted); }
+  .lc-row.done .pct { color: var(--accent); }
+  .lc-note { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 14px; }
+  #ai-output { flex: 1; max-height: none; border: none; border-radius: 0; background: transparent; padding: 18px max(16px, 3vw); }
+  .m { max-width: 72%; }
+  #ai-row { padding: 12px max(16px, 3vw); padding-bottom: max(12px, env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: color-mix(in srgb, var(--bg) 85%, transparent); }
+  #ai-prompt { padding: 13px 20px; font-size: 15px; }
+  @media (max-width: 820px) {
+    header { padding: 10px 14px; }
+    .tagline, #room-badge { display: none !important; }
+    #room-screen { flex-direction: column; }
+    #side { width: auto; flex: none; border-right: none; border-bottom: 1px solid var(--border); padding: 10px 12px; gap: 8px; max-height: none; overflow: visible; background: var(--panel); }
+    #side-room { display: flex; align-items: baseline; gap: 10px; padding: 8px 12px; border-radius: 12px; }
+    #side-room .side-k { display: none; }
+    #side-code { font-size: 20px; letter-spacing: 5px; margin: 0; }
+    .side-hint { font-size: 10px; }
+    #side > .side-k { display: none; }
+    input, select, textarea { font-size: 16px; }   /* iOS zooms into anything smaller */
+    #join-pledge { white-space: nowrap; }
+    #join-pledge input { font-size: 16px; width: 56px !important; flex: none; }
+    #join-pledge .step { width: 34px; height: 34px; }
+    #peers { flex-direction: row; overflow-x: auto; gap: 8px; padding-bottom: 2px; scrollbar-width: none; }
+    #peers::-webkit-scrollbar { display: none; }
+    .peer-card { min-width: 150px; padding: 8px 10px; border-radius: 12px; }
+    .peer-name { font-size: 13px; }
+    .peer-gpu { display: none; }
+    .peer-stats { margin-top: 5px; gap: 8px; font-size: 10px; }
+    .peer-card button { display: none; }
+    .pledge { margin-top: 6px; font-size: 10px; }
+    #ai-panel { padding: 8px 10px; border-radius: 12px; gap: 6px; }
+    #ai-panel > .side-k { display: none; }
+    #ai-head { flex-direction: row; align-items: center; gap: 8px; }
+    #ai-model { flex: 1; width: auto; padding: 8px 12px; font-size: 11.5px; }
+    #ai-start { width: auto; padding: 9px 18px; }
+    #ai-status { flex-basis: 100%; font-size: 10.5px; }
+    #cluster-bar { display: none; }
+    #chat-log { display: none; }
+    #chatpane { flex: 1; min-height: 0; }
+    #ai-output { padding: 12px 12px; }
+    .m { max-width: 88%; }
+    .m .bubble { font-size: 14px; padding: 9px 12px; }
+    #ai-row { padding: 8px 10px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+    #ai-prompt { padding: 11px 16px; font-size: 15px; }
+  }
+  @media (max-width: 640px) {
+    .tagline { display: none; }
+    #peers { grid-template-columns: 1fr 1fr; }
+    #join-screen input { width: min(320px, 84vw); }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><a href="/">swarm<span>LLM</span></a></div>
+  <div class="tagline">swarm room</div>
+  <div class="spacer"></div>
+  <div id="room-badge" title="Click to copy room code"></div>
+  <a id="gh-link" href="https://github.com/AllenJohnn/llm" target="_blank" rel="noopener" aria-label="SwarmLLM on GitHub" title="source on GitHub"><svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+</header>
+
+<div id="join-screen">
+  <div class="kicker">MESH INFERENCE</div>
+  <h1>start a <span>swarm</span></h1>
+  <p>One room code. Every device that types it becomes part of one machine.</p>
+  <input id="name-input" placeholder="device name (e.g. mac, phone)" maxlength="20">
+  <input id="code-input" placeholder="ROOM CODE" maxlength="6">
+  <div class="join-row">
+    <button id="create-btn" class="primary" type="button" onclick="window.swarmStart && window.swarmStart(true)">Create room</button>
+    <button id="join-btn" type="button" onclick="window.swarmStart && window.swarmStart(false)">Join room</button>
+  </div>
+  <div id="join-pledge">give <button class="step" id="gb-minus" type="button" onclick="window.stepGB && window.stepGB(-1)">−</button><input id="join-gb" type="number" min="1" max="64" step="1" value="1" inputmode="numeric"><button class="step" id="gb-plus" type="button" onclick="window.stepGB && window.stepGB(1)">+</button> GB of memory</div>
+  <div id="join-status"></div>
+</div>
+
+<div id="room-screen">
+  <aside id="side">
+    <div id="side-room"><div class="side-k">ROOM</div><div id="side-code" title="click to copy">----</div><div class="side-hint">share this code</div></div>
+    <div class="side-k">DEVICES</div>
+    <div id="peers"></div>
+    <div id="ai-panel">
+      <div class="side-k">MODEL</div>
+      <div id="ai-head">
+      <span id="ai-title">SWARM MODEL</span>
+      <select id="ai-model">
+        <option value="qwen3-0.6b">Qwen3 0.6B · Q8</option>
+        <option value="qwen3-1.7b">Qwen3 1.7B · Q8</option>
+        <option value="qwen3-4b">Qwen3 4B · Q8</option>
+        <option value="qwen3.8-27b">Qwen 3.8 27B · Q4</option>
+        <option value="smollm-135m">SmolLM 135M · bf16</option>
+      </select>
+      <div id="ai-need">
+        <div id="need-bar"><div id="need-fill"></div></div>
+        <div id="need-text">needs ~0.8 GB · room gives 0 GB</div>
+      </div>
+      <span id="ai-status">split across every device in the room</span>
+      <button id="ai-start" class="primary">start</button>
+    </div>
+    <div id="host-controls" class="host-section" hidden>
+      <label for="ai-visibility">who sees the chat</label>
+      <select id="ai-visibility" class="host-select">
+        <option value="all">everyone in the room</option>
+        <option value="host">only me</option>
+        <option value="asker">only whoever asked</option>
+      </select>
+      <div class="side-hint">every device still computes the answer; this only decides who sees the text</div>
+    </div>
+      <div id="ai-loading" style="display:none">
+        <div id="ldg-title"></div>
+        <div id="ldg-bar"><div id="ldg-fill"></div></div>
+        <div id="ldg-sub"></div>
+      </div>
+    </div>
+    <div id="awake" class="side-hint" style="margin-top:6px"></div>
+    <div id="cache-line" class="side-hint" style="margin-top:4px"><a href="#" id="cache-clear">clear cached weights</a></div>
+    <div id="cluster-bar">cluster: <b id="cluster-summary">—</b></div>
+  </aside>
+  <main id="chatpane">
+    <div id="chat-log"></div>
+    <div id="ai-empty">pick a model and press start</div>
+    <div id="load-card">
+      <div class="lc-k">DOWNLOADING <span id="lc-model"></span></div>
+      <div id="lc-rows"></div>
+      <div class="lc-note">each device fetches only its own layers, in step with the room</div>
+    </div>
+    <div id="ai-output"></div>
+    <div id="ai-row"><input id="ai-prompt" placeholder="ask the swarm…"><button id="ai-send" class="primary">Send</button></div>
+  </main>
+</div>
+
+<div id="toasts"></div>
+<script type="module">
+  async function initSwarm() {
+    const s = document.getElementById('join-status');
+    const notify = (msg, isErr = true) => {
+      if (s) {
+        s.style.color = isErr ? 'var(--err, #d1242f)' : 'var(--warn, #b58500)';
+        s.innerHTML = msg;
+      }
+      console.warn('[SwarmLLM Loader]', msg);
+    };
+
+    const roomUrl = '/room.js?v=' + Date.now();
+
+    // 1. Test fetching /room.js directly
+    try {
+      const resp = await fetch(roomUrl);
+      if (!resp.ok) {
+        notify(`<b>HTTP ${resp.status}:</b> Could not fetch <code>${roomUrl}</code>.<br>Make sure <code>npx serve</code> is running in the project directory.`);
+        return;
+      }
+      const ct = resp.headers.get('content-type') || '';
+      if (!ct.includes('javascript')) {
+        notify(`<b>Unexpected MIME type:</b> Server returned <code>${ct}</code> for <code>room.js</code> (expected JavaScript).`);
+        return;
+      }
+    } catch (e) {
+      notify(`<b>Network error:</b> Cannot fetch <code>room.js</code> (${e.message}).<br>Check if an ad-blocker or browser shield is blocking local scripts.`);
+      return;
+    }
+
+    // 2. Test fetching all imported submodules
+    const subs = [
+      ['/engine/wgsl/base.js', 'engine/wgsl/base.js'],
+      ['/engine/wgsl/gemm.js', 'engine/wgsl/gemm.js'],
+      ['/engine/wgsl/coop.js', 'engine/wgsl/coop.js'],
+      ['/engine/wgsl/qwen35.js', 'engine/wgsl/qwen35.js'],
+      ['/engine/quantize.js', 'engine/quantize.js'],
+      ['/engine/sampling.js', 'engine/sampling.js'],
+      ['/engine/tokenizer.js', 'engine/tokenizer.js'],
+      ['/engine/autotune.js', 'engine/autotune.js'],
+      ['/engine/safetensors.js', 'engine/safetensors.js'],
+      ['/engine/gguf.js', 'engine/gguf.js'],
+      ['/engine/dense.js', 'engine/dense.js'],
+      ['/engine/selftest.js', 'engine/selftest.js'],
+      ['/engine/engine.js', 'engine/engine.js'],
+      ['/engine/qwen35.js', 'engine/qwen35.js'],
+      ['/room/wire.js', 'room/wire.js'],
+      ['/room/markdown.js', 'room/markdown.js'],
+      ['/room/sampling.js', 'room/sampling.js'],
+      ['/room/visibility.js', 'room/visibility.js'],
+      ['/room/models.js', 'room/models.js'],
+      ['/room/transport.js', 'room/transport.js']
+    ];
+
+    for (const [url, name] of subs) {
+      try {
+        const subResp = await fetch(url);
+        if (!subResp.ok) {
+          notify(`<b>Missing file:</b> <code>${name}</code> returned HTTP ${subResp.status}`);
+          return;
+        }
+      } catch (e) {
+        notify(`<b>Blocked/Network error:</b> Cannot fetch <code>${name}</code> (${e.message})`);
+        return;
+      }
+    }
+
+    // 3. Test importing submodules individually to isolate syntax/eval issues
+    for (const [url, name] of subs) {
+      try {
+        await import(url);
+      } catch (e) {
+        notify(`<b>Submodule error in ${name}:</b><br>${e.message || e}`);
+        return;
+      }
+    }
+
+    // 4. Finally import room.js
+    try {
+      await import(roomUrl);
+      if (s && (s.textContent.includes('Loading') || s.textContent.includes('HTTP'))) {
+        s.textContent = '';
+      }
+      console.log('SwarmLLM room module loaded and initialized successfully');
+    } catch (e) {
+      notify(`<b>Error in room.js:</b> ${e.message || e}`);
+    }
+  }
+
+  initSwarm();
+</script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+# Default owners for everything; add collaborators per path as the project grows.
+*               @AllenJohnn
+/engine/        @AllenJohnn
+/p2p.html       @AllenJohnn
+/SECURITY.md    @AllenJohnn
+/GOVERNANCE.md  @AllenJohnn
