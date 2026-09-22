@@ -27,5 +27,5 @@ export const MODELS = {
 // for this many positions (4 KB per position each for the 27B, so 16 MiB per attention layer at
 // 2048); the kernels only use it as a stride. Generation stops before the cache would overflow.
 export const MAX_SEQ = 2048;
-export const MAX_NEW = 400;    // longest answer, tokens
+export const MAX_NEW = 2048;   // longest answer, tokens (utilizes full remaining context)
 export const MIN_ROOM = 32;    // a prompt must leave at least this many tokens for the answer

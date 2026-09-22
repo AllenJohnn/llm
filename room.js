@@ -171,6 +171,161 @@ function peerCard(id, name, meta, self) {
   return card;
 }
 
+function updateTopbarPeers() {
+  const container = $("topbar-peers");
+  if (!container) return;
+  if ($("room-screen")?.style.display !== "flex") {
+    container.classList.remove("on");
+    return;
+  }
+  container.classList.add("on");
+
+  const list = [];
+  list.push({
+    id: "self",
+    name: myName || "you",
+    meta: myMeta || {},
+    self: true,
+    rtt: null,
+    bw: null
+  });
+
+  for (const [id, m] of members.entries()) {
+    const c = conns.get(id);
+    list.push({
+      id,
+      name: m.name || c?.name || id,
+      meta: m.meta || c?.meta || {},
+      self: false,
+      rtt: c?.rtt ?? null,
+      bw: c?.bw ?? null
+    });
+  }
+
+  const isDownloading = !!(ai.isDownloading || $("load-card")?.classList.contains("on"));
+
+  container.innerHTML = list.map((p) => {
+    const isSelf = p.self;
+    const dotClass = isSelf ? "ok" : (p.rtt !== null ? "ok" : "warn");
+    const budget = p.meta.contribGB ? p.meta.contribGB + " GB" : (p.meta.budgetGB || p.meta.maxBufGB ? (p.meta.budgetGB || p.meta.maxBufGB) + " GB" : "");
+    const metaTag = budget ? budget : (p.meta.webgpu ? "GPU" : "no GPU");
+
+    let progHtml = "";
+    if (isDownloading) {
+      const pct = (ai.prog || {})[p.name] ?? (isSelf ? Math.round(ai.myPct || 0) : 0);
+      const isDone = pct >= 100;
+      progHtml = `<span class="tb-prog active${isDone ? " done" : ""}">${isDone ? "ready" : pct + "%"}</span>`;
+    }
+
+    const titleInfo = [
+      p.name + (isSelf ? " (you)" : ""),
+      p.meta.ua || "",
+      p.meta.gpu || (p.meta.webgpu ? "WebGPU" : "No WebGPU"),
+      budget ? "Gives " + budget : "",
+      p.rtt ? `RTT: ${p.rtt}ms` : "",
+      p.bw ? `BW: ${p.bw}` : ""
+    ].filter(Boolean).join(" · ");
+
+    return `<div class="topbar-peer-chip${isSelf ? " self" : ""}" title="${esc(titleInfo)}" data-id="${esc(p.id)}">
+      <span class="dot ${dotClass}"></span>
+      <span class="tb-name">${esc(p.name)}${isSelf ? " (you)" : ""}</span>
+      ${progHtml ? progHtml : (metaTag ? `<span class="tb-meta">${esc(metaTag)}</span>` : "")}
+    </div>`;
+  }).join("");
+
+  container.querySelectorAll(".topbar-peer-chip").forEach((chip) => {
+    const id = chip.dataset.id;
+    if (id && id !== "self") {
+      chip.style.cursor = "pointer";
+      chip.title += " (click to test bandwidth)";
+      chip.addEventListener("click", () => bwTest(id));
+    } else if (id === "self" && myMeta.webgpu) {
+      chip.style.cursor = "pointer";
+      chip.title += " (click to change GPU memory pledge)";
+      chip.addEventListener("click", () => {
+        const cur = myMeta.contribGB || 1;
+        const input = prompt(`Allocate GPU memory (GB) for ${myName}:`, cur);
+        if (input !== null) {
+          const v = parseFloat(input);
+          if (!isNaN(v) && v >= (myMeta.phone ? 0.5 : 1) && v <= 64) {
+            myMeta.contribGB = v;
+            const selfCard = document.querySelector(".peer-card.self");
+            if (selfCard) {
+              const buf = selfCard.querySelector(".buf");
+              if (buf) buf.textContent = "gives " + v + " GB";
+              const pInput = selfCard.querySelector(".pledge input");
+              if (pInput) pInput.value = v;
+            }
+            updateCluster();
+            broadcastAll({ t: "pledge", gb: v });
+          }
+        }
+      });
+    }
+  });
+}
+
+let tbDoneTimer = null;
+function updateTopbarDownload(show, done = 0, total = 0, note = "") {
+  const el = $("topbar-download");
+  const line = $("topbar-progress-line");
+  const fill = $("topbar-progress-fill");
+  if (!el || !line || !fill) return;
+
+  if (tbDoneTimer) { clearTimeout(tbDoneTimer); tbDoneTimer = null; }
+
+  if (!show) {
+    ai.isDownloading = false;
+    if (ai.engine) {
+      el.classList.add("ready");
+      const pctEl = el.querySelector(".tb-dl-pct");
+      if (pctEl) pctEl.textContent = "ready";
+      fill.style.width = "100%";
+      tbDoneTimer = setTimeout(() => {
+        el.classList.remove("on", "ready");
+        line.classList.remove("active");
+        fill.style.width = "0%";
+      }, 1800);
+    } else {
+      el.classList.remove("on", "ready");
+      line.classList.remove("active");
+      fill.style.width = "0%";
+    }
+    updateTopbarPeers();
+    return;
+  }
+
+  ai.isDownloading = true;
+  el.classList.remove("ready");
+  el.classList.add("on");
+  line.classList.add("active");
+
+  const modelKey = $("ai-model")?.value;
+  const modelName = (MODELS[modelKey]?.label || "Model").split("\u00b7")[0].trim();
+
+  let pct = 0;
+  if (total && total > 0) {
+    pct = Math.min(100, Math.round((done / total) * 100));
+  } else if (ai.myPct) {
+    pct = Math.min(100, Math.round(ai.myPct));
+  }
+
+  const bytesText = (total && total > 0)
+    ? `${(done / 2 ** 20).toFixed(0)} / ${(total / 2 ** 20).toFixed(0)} MB`
+    : (note ? note : (pct ? `${pct}%` : "syncing…"));
+
+  el.innerHTML = `
+    <div class="tb-dl-icon"></div>
+    <span class="tb-dl-name">${esc(modelName)}</span>
+    <div class="tb-dl-bar"><div class="tb-dl-fill" style="width:${pct}%"></div></div>
+    <span class="tb-dl-pct">${pct}%</span>
+    <span class="tb-dl-bytes">${esc(bytesText)}</span>
+  `;
+
+  fill.style.width = pct + "%";
+  updateTopbarPeers();
+}
+
 let wasReady = false;
 function updateNeed(pledged) {
   const need = NEED_GB[$("ai-model").value] || 1;
@@ -193,6 +348,7 @@ function updateCluster() {
   const mem = all.reduce((s, m) => s + (m?.budgetGB || m?.maxBufGB || 0), 0);
   $("cluster-summary").textContent =
     `${all.length} device${all.length > 1 ? "s" : ""} \u00b7 ${gpus} WebGPU \u00b7 ${pledged.toFixed(1)} GB pledged`;
+  updateTopbarPeers();
 }
 
 function enterRoom() {
@@ -279,7 +435,7 @@ function ensureCard(id, name, meta) {
   if (e) e.card = card;
   return card;
 }
-function dropCard(id) { const c = cards.get(id); if (c) { c.remove(); cards.delete(id); } }
+function dropCard(id) { const c = cards.get(id); if (c) { c.remove(); cards.delete(id); } updateTopbarPeers(); }
 // open a data link to a chain neighbour if we do not have one yet; resolves when it is up
 function ensureLink(id, timeoutMs = 60000) {
   if (!id || id === "host" || conns.has(id)) return Promise.resolve(true);
@@ -735,6 +891,7 @@ function aiLoading(show, title) {
   $("load-card").classList.toggle("on", !!show);
   $("ai-empty").style.display = show ? "none" : "";
   if (show) { $("lc-model").textContent = MODELS[$("ai-model").value]?.label.split("\u00b7")[0].trim() || ""; loadCardRender(); }
+  updateTopbarDownload(show, 0, 0, title);
 }
 function loadCardRender() {
   const rows = $("lc-rows"); if (!rows) return;
@@ -745,11 +902,18 @@ function loadCardRender() {
     const l = layersOf(nm);
     return `<div class="lc-row${pct >= 100 ? " done" : ""}"><div class="n">${nm}${l ? `<small>layers ${l}</small>` : ""}</div><div class="bar"><div class="fill" style="width:${pct}%"></div></div><div class="pct">${pct >= 100 ? "ready" : pct + "%"}</div></div>`;
   }).join("");
+  updateTopbarPeers();
+  if (ai.isDownloading) {
+    updateTopbarDownload(true, ai.myBytesDone || 0, ai.myBytesTotal || 0);
+  }
 }
 function aiProgress(done, total, note) {
+  ai.myBytesDone = done;
+  ai.myBytesTotal = total;
   const pct = total ? Math.min(100, Math.round(done / total * 100)) : 0;
   $("ldg-fill").style.width = pct + "%";
   $("ldg-sub").textContent = `${(done / 2 ** 20).toFixed(0)} MB of ${(total / 2 ** 20).toFixed(0)} MB · ${pct}%` + (note ? " · " + note : "");
+  updateTopbarDownload(true, done, total, note);
 }
 function aiOut() { const o = $("ai-output"); o.style.display = "block"; $("ai-empty").style.display = "none"; return o; }
 let botEl = null;
@@ -773,10 +937,25 @@ function chatBotUpdate(raw) {
   botEl.querySelector(".bubble").innerHTML = md(raw) + '<span class="cursor"></span>';
   $("ai-output").scrollTop = $("ai-output").scrollHeight;
 }
-function chatBotEnd(raw, stats) {
+function chatBotEnd(raw, stats, capped = false) {
   if (!botEl) chatBotStart();
   botEl.querySelector(".bubble").innerHTML = md(raw);
   if (stats) { const s = document.createElement("div"); s.className = "stats"; s.textContent = stats; botEl.appendChild(s); }
+  if (capped && raw) {
+    const btn = document.createElement("button");
+    btn.className = "ai-continue-btn";
+    btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-1px;margin-right:4px"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zM4.5 7.5a.5.5 0 0 0 0 1h5.793l-2.147 2.146a.5.5 0 0 0 .708.708l3-3a.5.5 0 0 0 0-.708l-3-3a.5.5 0 1 0-.708.708L10.293 7.5H4.5z"/></svg>Continue answer`;
+    btn.onclick = () => {
+      const tail = raw.trim().slice(-120);
+      const prompt = `Please continue your response directly from where you stopped: "…${tail}"`;
+      $("ai-prompt").value = prompt;
+      const el = $("ai-prompt");
+      el.style.height = "auto";
+      el.style.height = Math.min(el.scrollHeight, 120) + "px";
+      aiSubmit();
+    };
+    botEl.appendChild(btn);
+  }
   botEl = null;
 }
 
@@ -1113,7 +1292,7 @@ async function aiPipeToken(id, needLogits = true) {
 function sendChat(msg, askerId) {
   const { full, hidden } = chatRecipients(ai.visibility || "all", askerId, [...conns.keys()]);
   for (const id of full) sendTo(id, msg);
-  if (msg.t !== "ai-token") for (const id of hidden) sendTo(id, { t: msg.t, name: msg.name, stats: msg.stats, hidden: true });
+  if (msg.t !== "ai-token") for (const id of hidden) sendTo(id, { t: msg.t, name: msg.name, stats: msg.stats, capped: msg.capped, hidden: true });
 }
 async function aiGenerate(textArg, who, askerId = peer.id) {
   const text = (textArg ?? $("ai-prompt").value).trim();
@@ -1124,6 +1303,7 @@ async function aiGenerate(textArg, who, askerId = peer.id) {
   broadcastAll({ t: "ai-reset" });
   ai.busy = "gen";
   $("ai-prompt").value = "";
+  $("ai-prompt").style.height = "auto";
   $("ai-send").disabled = true;
   const V = ai.tok.vocab;
   const imStart = V["<|im_start|>"], imEnd = V["<|im_end|>"], eot = V["<|endoftext|>"];
@@ -1267,7 +1447,7 @@ async function aiGenerate(textArg, who, askerId = peer.id) {
       // position and returns only the tokens after it, so it has to be emitted (or end the
       // answer) before the loop, or the reply starts one word late
       let next = aiSample(logits), done = false;
-      if (next === imEnd || next === eot) done = true; else emit(next);
+      if (next === imEnd || next === eot || next === imStart) done = true; else emit(next);
       while (!done && count < maxNew) {
         // a speculative step touches positions pos .. pos+K (K drafts verified in one pass) and
         // drafts one more; shrink K near the end of the context and stop before it overflows
@@ -1281,31 +1461,33 @@ async function aiGenerate(textArg, who, askerId = peer.id) {
         kc.ema[K] = kc.n[K] ? 0.6 * kc.ema[K] + 0.4 * tps : tps;
         kc.n[K] = (kc.n[K] || 0) + 1; kc.used[K] = (kc.used[K] || 0) + toks.length;
         for (const tk of toks) {
-          if (tk === imEnd || tk === eot) { done = true; break; }
-          if (count >= maxNew) { done = true; capped = maxNew < MAX_NEW; break; }
+          if (tk === imEnd || tk === eot || tk === imStart) { done = true; break; }
+          if (count >= maxNew) { done = true; capped = true; break; }
           emit(tk);
         }
         next = toks[toks.length - 1];
       }
-      if (!done && count >= maxNew) capped = maxNew < MAX_NEW;
+      if (!done && count >= maxNew) capped = true;
       ai.pos = ai.engine.pos;
       const st = ai.engine.mtp.stats;
       if (st.drafts) crumb(`spec: ${st.accepted}/${st.drafts} drafts accepted${ai.lapMs ? ` · lap ${Math.round(ai.lapMs)}ms` : ""}`
         + (ai.chain.length ? ` · K tok/s ${kc.cand.map((k) => `${k}:${kc.ema[k] ? kc.ema[k].toFixed(1) : "-"}`).join(" ")} · tokens by K ${JSON.stringify(kc.used)}` : ""));
     } else {
+      let hitEos = false;
       for (let i = 0; i < maxNew; i++) {
         const next = aiSample(logits);
-        if (next === imEnd || next === eot) { await aiPipeToken(next, false); break; }
+        if (next === imEnd || next === eot || next === imStart) { hitEos = true; await aiPipeToken(next, false); break; }
         emit(next);
-        if (ai.pos >= MAX_SEQ - 1) { capped = true; break; }   // no position left for another token
+        if (ai.pos >= MAX_SEQ - 1 || i === maxNew - 1) { capped = true; break; }   // no position left for another token
         logits = await aiPipeToken(next);
       }
+      if (!hitEos && !capped && count >= maxNew) capped = true;
     }
     const secs = (performance.now() - t0) / 1000;
-    const stats = `${count} tok · ${(count / secs).toFixed(1)} tok/s · ${ai.chain.length + 1} devices${capped ? ` · stopped: context full (${MAX_SEQ} tokens)` : ""}`;
-    chatBotEnd(reply, stats);
-    sendChat({ t: "ai-gendone", stats }, askerId);
-    mascot("Done. Anyone in the room can ask the next one.");
+    const stats = `${count} tok · ${(count / secs).toFixed(1)} tok/s · ${ai.chain.length + 1} devices${capped ? ` · stopped: context limit reached (${MAX_SEQ} tokens)` : ""}`;
+    chatBotEnd(reply, stats, capped);
+    sendChat({ t: "ai-gendone", stats, capped }, askerId);
+    mascot(capped ? "Context limit reached. Ask to continue or start a new question." : "Done. Anyone in the room can ask the next one.");
     aiStatus(`ready — prefill ${((t0 - tPre) / 1000).toFixed(1)}s, ${stats}`);
   } catch (err) {
     aiStatus("generation failed: " + err.message);
@@ -1471,7 +1653,7 @@ async function aiOnData(from, d) {
       mascot(`${d.name} asked something. Thinking…`);
       break;
     case "ai-token": ai.remoteReply = (ai.remoteReply || "") + d.text; chatBotUpdate(ai.remoteReply); break;
-    case "ai-gendone": chatBotEnd(d.hidden ? "answer hidden by the host" : (ai.remoteReply || ""), d.stats); $("ai-send").disabled = false; mascot("Your turn. Ask anything."); break;
+    case "ai-gendone": chatBotEnd(d.hidden ? "answer hidden by the host" : (ai.remoteReply || ""), d.stats, d.capped); $("ai-send").disabled = false; mascot(d.capped ? "Reached context limit. Ask to continue or start fresh." : "Your turn. Ask anything."); break;
     case "ai-ready-all":
       aiLoading(false);
       $("ai-panel").classList.add("online");
@@ -1501,16 +1683,28 @@ $("cache-clear").addEventListener("click", async (ev) => {
   try { await caches.delete("swarmllm-weights-v1"); weightCache = null; toast("cached weights cleared"); } catch { toast("could not clear the cache"); }
 });
 function aiSubmit() {
-  const text = $("ai-prompt").value.trim();
+  const promptEl = $("ai-prompt");
+  const text = promptEl.value.trim();
   if (!text) return;
   if (ai.role === "host") { aiGenerate(); return; }
   const hostId = ai.hostId;
   if (!conns.has(hostId)) { toast("not connected to the host"); return; }
-  $("ai-prompt").value = "";
+  promptEl.value = "";
+  promptEl.style.height = "auto";
   sendTo(hostId, { t: "ai-ask", text, name: myName });
 }
 $("ai-send").addEventListener("click", aiSubmit);
-$("ai-prompt").addEventListener("keydown", (e) => { if (e.key === "Enter") aiSubmit(); });
+$("ai-prompt").addEventListener("input", () => {
+  const el = $("ai-prompt");
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, 120) + "px";
+});
+$("ai-prompt").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    aiSubmit();
+  }
+});
 mascot("Hi! I'm Swarmy. Create a room, or type a friend's code to join one.");
 
 window.__roomStart = start;
