@@ -82,10 +82,30 @@ for (const shape of SH) {
     return Math.sqrt(num / den); };
   const r1 = rel(a, b), r2 = rel(aa, ba);
   worst = Math.max(worst, r1, r2);
-  const ok = r1 < 5e-6 && r2 < 5e-6;
+  let ok = r1 < 5e-6 && r2 < 5e-6;
   if (!ok) fails++;
-  console.log(`${shape.padEnd(12)} S=${String(Sp).padEnd(2)} relDiff ${r1.toExponential(2)}  acc ${r2.toExponential(2)}  ${ok ? "ok" : "FAIL"}`);
-  for (const bb of [qs, sc, x, xT, part, yRef, yG, yA, yRA]) bb.destroy();
+  console.log(`Q4 ${shape.padEnd(12)} S=${String(Sp).padEnd(2)} relDiff ${r1.toExponential(2)}  acc ${r2.toExponential(2)}  ${ok ? "ok" : "FAIL"}`);
+
+  // Test Q8 GEMM on the same shape
+  const qs8 = buf(Uint32Array.from({ length: dOut * dIn / 4 }, () => (Math.random() * 2 ** 32) >>> 0));
+  const pG8 = await pipe(`gemm_q8_${dIn}_s${Sp}`);
+  run(pG8, bg1(qs8, sc, xT, part, shp), Math.ceil(dOut / GEMM_TILE) * Sp);
+  run(pR, bg1(part, sc, sc, yG, shp), Math.ceil(N * dOut / 64));
+  const pRef8 = await pipe("matvec_q8_coop_b");
+  run(pRef8, bg1(qs8, sc, x, yRef, shp), Math.ceil(dOut / 1));
+
+  const yA8 = buf(seed), yRA8 = buf(seed);
+  run(await pipe(`gemm_red_s${Sp}_acc`), bg1(part, sc, sc, yA8, shp), Math.ceil(N * dOut / 64));
+  run(await pipe("matvec_q8_coop_b_acc"), bg1(qs8, sc, x, yRA8, shp), Math.ceil(dOut / 1));
+
+  const [a8, b8, aa8, ba8] = await Promise.all([read(yG, N * ys), read(yRef, N * ys), read(yA8, N * ys), read(yRA8, N * ys)]);
+  const r1_8 = rel(a8, b8), r2_8 = rel(aa8, ba8);
+  worst = Math.max(worst, r1_8, r2_8);
+  const ok8 = r1_8 < 5e-6 && r2_8 < 5e-6;
+  if (!ok8) fails++;
+  console.log(`Q8 ${shape.padEnd(12)} S=${String(Sp).padEnd(2)} relDiff ${r1_8.toExponential(2)}  acc ${r2_8.toExponential(2)}  ${ok8 ? "ok" : "FAIL"}`);
+
+  for (const bb of [qs, sc, x, xT, part, yRef, yG, yA, yRA, qs8, yA8, yRA8]) bb.destroy();
 }
 console.log(fails ? `GEMM FAIL (${fails} shapes)` : `GEMM PASS ✓ (worst relDiff ${worst.toExponential(2)}, gate 5e-6)`);
 if (fails) Deno.exit(1);

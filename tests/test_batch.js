@@ -9,10 +9,10 @@ const openFile = async (path) => {
 };
 const adapter = await navigator.gpu.requestAdapter();
 const device = await adapter.requestDevice({ requiredLimits: { maxBufferSize: adapter.limits.maxBufferSize, maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize } });
-const readAt = await openFile("../models/qwen/model.gguf");
+const readAt = await openFile(new URL("../models/qwen/model.gguf", import.meta.url));
 const G = parseGGUFHeader((await readAt(0, 64 << 20)).buffer, { skipTokenizer: true });
-const tok = makeTokenizer(JSON.parse(await Deno.readTextFile("../models/qwen/tokenizer.json")));
-const cfg = JSON.parse(await Deno.readTextFile("../models/qwen/config.json"));
+const tok = makeTokenizer(JSON.parse(await Deno.readTextFile(new URL("../models/qwen/tokenizer.json", import.meta.url))));
+const cfg = JSON.parse(await Deno.readTextFile(new URL("../models/qwen/config.json", import.meta.url)));
 const mk = async () => {
   const weights = await ggufWeights(G, (i) => readAt(i.byteOffset, i.byteLength), { lo: 0, hi: cfg.num_hidden_layers, hasEmbed: true, hasHead: true });
   return DenseEngine.create({ device, cfg, weights, layerRange: [0, cfg.num_hidden_layers], hasEmbed: true, hasHead: true, maxSeq: 128 });

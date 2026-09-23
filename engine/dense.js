@@ -14,7 +14,7 @@ export class DenseEngine {
     return e;
   }
 
-  async _init({ device, cfg, tensors, weights, layerRange, hasEmbed = true, hasHead = true, maxSeq = 512, matvecVariant = "coop", coopWG = 256, coopRows = 4 }) {
+  async _init({ device, cfg, tensors, weights, layerRange, hasEmbed = true, hasHead = true, maxSeq = 2048, matvecVariant = "coop", coopWG = 256, coopRows = 4 }) {
     this.device = device;
     this.cfg = cfg;
     this.maxSeq = maxSeq;
@@ -120,6 +120,7 @@ export class DenseEngine {
     }));
 
     if (hasEmbed || hasHead) {
+      this.cpuEmbed = W.embed;
       if (W.embed.kind === "f32") {
         this.embedGPU = this._buf(W.embed.data, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
         this.headEntry = { kind: "f32", buf: this.embedGPU };
@@ -327,6 +328,7 @@ export class DenseEngine {
   // Whole token (all layers + head) is recorded into ONE command encoder and
   // submitted once: per-submit validation/IPC used to cost ~67 submits/token.
   async forwardToken(tokenId, debugCapture) {
+    if (this.pos >= this.maxSeq) throw new Error(`Context overflow: position ${this.pos} exceeds maxSeq ${this.maxSeq}`);
     const { dim, vocab } = this.dims;
     this._setFrame(this.pos, this.pos + 1);
     this._stageEmbed(tokenId);
@@ -512,6 +514,7 @@ export class DenseEngine {
   }
   // worker, split mode: 4 hiddens in, my layers, 4 hiddens out
   async runHiddenBatch(xs, basePos) {
+    if (basePos + (xs.length / this.dims.dim) > this.maxSeq) throw new Error(`Context overflow: batch positions exceed maxSeq ${this.maxSeq}`);
     if (!this.B) this._initBatch();
     const { dim } = this.dims;
     this.pos = basePos;
@@ -525,6 +528,7 @@ export class DenseEngine {
   // consume prompt tokens (no logits): chunks of 4 through the batched path,
   // remainder through the single-token fast path.
   async prefillTokens(ids) {
+    if (this.pos + ids.length > this.maxSeq) throw new Error(`Context overflow: prefill tokens reach ${this.pos + ids.length}, exceeding maxSeq ${this.maxSeq}`);
     if (!this.B && this.hasEmbed) this._initBatch();
     let i = 0;
     let sinceSync = 0;
@@ -582,14 +586,8 @@ export class DenseEngine {
     this.pos = pos;
     this._setFrame(pos, pos + 1);
     this._stageEmbed(tokenId);
-    let enc = this.device.createCommandEncoder();
-    for (let i = 0; i < this.layers.length; i++) {
-      this._encodeLayer(enc, i);
-      if (i % 4 === 3 && i + 1 < this.layers.length) {
-        this.device.queue.submit([enc.finish()]);
-        enc = this.device.createCommandEncoder();
-      }
-    }
+    const enc = this.device.createCommandEncoder();
+    for (let i = 0; i < this.layers.length; i++) this._encodeLayer(enc, i);
     this.device.queue.submit([enc.finish()]);
     return await this._readback(this.x, this.stageX, dim);
   }
@@ -611,18 +609,13 @@ export class DenseEngine {
 
   // worker peer: hidden in, my layers, hidden out
   async runHidden(xIn, pos) {
+    if (pos >= this.maxSeq) throw new Error(`Context overflow: position ${pos} exceeds maxSeq ${this.maxSeq}`);
     const { dim } = this.dims;
     this.pos = pos;
     this._setFrame(pos, pos + 1);
     this.device.queue.writeBuffer(this.x, 0, xIn);
-    let enc = this.device.createCommandEncoder();
-    for (let i = 0; i < this.layers.length; i++) {
-      this._encodeLayer(enc, i);
-      if (i % 4 === 3 && i + 1 < this.layers.length) {
-        this.device.queue.submit([enc.finish()]);
-        enc = this.device.createCommandEncoder();
-      }
-    }
+    const enc = this.device.createCommandEncoder();
+    for (let i = 0; i < this.layers.length; i++) this._encodeLayer(enc, i);
     this.device.queue.submit([enc.finish()]);
     return await this._readback(this.x, this.stageX, dim);
   }

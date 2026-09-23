@@ -23,8 +23,12 @@ async function test(name, fn) {
 }
 
 // 1. Models tests
-await test("models: catalog has all 7 expected models", () => {
-  const expected = ["qwen3-0.6b", "qwen3-1.7b", "qwen3-4b", "qwen2.5-coder-1.5b", "phi-4-mini", "qwen3.8-27b", "smollm-135m"];
+await test("models: catalog has all 10 expected models", () => {
+  const expected = [
+    "qwen3-0.6b", "qwen3-1.7b", "qwen3-4b", "qwen2.5-coder-1.5b",
+    "qwen2.5-coder-7b", "deepseek-r1-distill-qwen-14b", "qwq-32b",
+    "phi-4-mini", "qwen3.8-27b", "smollm-135m"
+  ];
   for (const k of expected) {
     assert(MODELS[k], `Missing model key: ${k}`);
     assert(NEED_GB[k] > 0, `Missing NEED_GB for: ${k}`);
@@ -95,10 +99,10 @@ await test("generator: WGSL balanced braces and entry points", () => {
 function fakeChannels(link, n, sink) {
   for (let i = 0; i < n; i++) link.chans.push({ readyState: "open", send: (buf) => sink.push({ i, buf }) });
 }
-function receiver(onFrame) {
-  const link = makeLink(); let handler = null;
+function receiver(onFrame, opts = {}) {
+  const link = makeLink(opts); let handler = null;
   const pc = { createDataChannel: () => ({ set onmessage(f) { handler = f; }, set onclose(_) {}, readyState: "open" }) };
-  attachWire(link, { peerConnection: pc }, onFrame);
+  attachWire(link, { peerConnection: pc }, onFrame, opts);
   return (buf) => handler({ data: buf });
 }
 
@@ -133,6 +137,33 @@ for (const sh of shapes) {
 await test("transport refuses when no channel is open", () => {
   const link = makeLink(); link.chans.push({ readyState: "connecting", send() {} });
   if (sendFrame(link, { t: "ai-hidden", pos: 0, data: new Uint16Array(8) })) throw new Error("should refuse");
+});
+
+await test("transport: FEC recovers single dropped slice in each block under packet loss", () => {
+  const data = new Uint16Array(dim * 8); // spans multiple slices
+  for (let i = 0; i < data.length; i++) data[i] = (i * 31337 + 7) & 0xFFFF;
+  const link = makeLink({ ordered: false, fec: true });
+  const out = [];
+  fakeChannels(link, 4, out);
+  if (!sendFrame(link, { t: "ai-hidden-b", basePos: 100, n: 4, data })) throw new Error("send refused");
+
+  const nDataSlices = Math.ceil(data.byteLength / (SLICE_BYTES - 24));
+  assert(out.length > nDataSlices, "FEC parity slice should be emitted");
+
+  // Simulate packet loss: drop slice 1 (a middle data slice)
+  const simulated = out.filter((_, idx) => idx !== 1);
+  let got = null;
+  const deliver = receiver((m) => { got = m; }, { ordered: false, fec: true });
+
+  // Shuffle order to simulate unordered delivery over WebRTC
+  const shuffled = [...simulated].reverse();
+  for (const { buf } of shuffled) deliver(buf);
+
+  assert(got !== null, "frame should be reconstructed despite FEC parity slice");
+  eq(got.data.length, data.length);
+  for (let i = 0; i < data.length; i++) {
+    eq(got.data[i], data[i]);
+  }
 });
 
 // 5. Sampling and Repetition Penalty tests
@@ -212,5 +243,8 @@ await test("models: Qwen models have thinking enabled and SmolLM disabled", () =
   assert(MODELS["qwen3-1.7b"].thinking === true, "qwen3-1.7b should have thinking: true");
   assert(MODELS["smollm-135m"].thinking === false, "smollm-135m should have thinking: false");
 });
+
+import { runContextTests } from "./context_overflow_test.js";
+await runContextTests(test);
 
 console.log(`\nAll ${passed} tests passed successfully!`);

@@ -16,12 +16,20 @@ export function f32ToB64(f) {
 export const WIRE_F16 = true;
 
 export function packF16(f) {
+  if (typeof Float16Array !== "undefined") {
+    const h = new Float16Array(f);
+    return new Uint16Array(h.buffer, h.byteOffset, h.length);
+  }
   const out = new Uint16Array(f.length);
   for (let i = 0; i < f.length; i++) out[i] = f32ToF16(f[i]);
   return out;
 }
 
 export function unpackF16(u) {
+  if (typeof Float16Array !== "undefined") {
+    const h = new Float16Array(u.buffer, u.byteOffset, u.length);
+    return new Float32Array(h);
+  }
   const out = new Float32Array(u.length);
   for (let i = 0; i < u.length; i++) out[i] = f16ToF32(u[i]);
   return out;

@@ -32,7 +32,7 @@ export class Qwen35Engine {
   }
 
   // opts: { device, meta (gguf meta), weights, layerRange, hasEmbed, hasHead, maxSeq }
-  async _init({ device, meta, weights, layerRange, hasEmbed = true, hasHead = true, maxSeq = 512, vocab: vocabOpt, matvecVariant = "coop", coopWG = 256, coopRows = 4, batchCols = 4, coopRowsB = coopRows, gemm = true }) {
+  async _init({ device, meta, weights, layerRange, hasEmbed = true, hasHead = true, maxSeq = 2048, vocab: vocabOpt, matvecVariant = "coop", coopWG = 256, coopRows = 4, batchCols = 4, coopRowsB = coopRows, gemm = true }) {
     this.device = device;
     this.mvVariant = matvecVariant;
     this.coopWG = coopWG; this.coopRows = coopRows;
@@ -132,7 +132,10 @@ export class Qwen35Engine {
     // the prefill GEMM and its split-K reduce / transpose all reuse the
     // matvec_q4_coop_b layout (qs, sc, x, y, shape) verbatim
     if (this.gemmOn) {
-      for (const [dIn, S] of this._gemmPairs) G1[`gemm_q4_${dIn}_s${S}`] = G1.matvec_q4_coop_b;
+      for (const [dIn, S] of this._gemmPairs) {
+        G1[`gemm_q4_${dIn}_s${S}`] = G1.matvec_q4_coop_b;
+        G1[`gemm_q8_${dIn}_s${S}`] = G1.matvec_q8_coop_b;
+      }
       for (const S of this._gemmSplits) { G1[`gemm_red_s${S}`] = G1.matvec_q4_coop_b; G1[`gemm_red_s${S}_acc`] = G1.matvec_q4_coop_b; }
       G1.gemm_xpose = G1.matvec_q4_coop_b;
     }
@@ -599,8 +602,8 @@ export class Qwen35Engine {
         op[`wgs${W}`] = Math.ceil(dOut / this._rowsFor(W));   // narrower twins carry more rows per workgroup
       }
       const S2 = this._gemmShapes.get(`${dOut}x${dIn}`);
-      if (S2 && w.kind === "q4" && xT) {
-        const gp = `gemm_q4_${dIn}_s${S2}`, rp = `gemm_red_s${S2}${acc ? "_acc" : ""}`;
+      if (S2 && (w.kind === "q4" || w.kind === "q8") && xT) {
+        const gp = `gemm_${w.kind}_${dIn}_s${S2}`, rp = `gemm_red_s${S2}${acc ? "_acc" : ""}`;
         op.gemm = {
           pipe: gp, wgs: Math.ceil(dOut / GEMM_TILE) * S2,
           bg: [0, 1].map((z) => this._bg(this.pipes[gp], 1, [w.qs, w.sc, xT, this.gemmP[z], shp])),
@@ -793,6 +796,7 @@ export class Qwen35Engine {
   // ids.length columns (1..4). snapshot: save recurrent state after every
   // non-final column so restoreDN(k) can undo a rejected speculative suffix.
   async embedRunBatch(ids, basePos, snapshot = false) {
+    if (basePos + ids.length > this.maxSeq) throw new Error(`Context overflow: batch positions reach ${basePos + ids.length}, exceeding maxSeq ${this.maxSeq}`);
     if (!this.B) this._initBatch();
     const n = ids.length;
     this.pos = basePos;
@@ -805,6 +809,7 @@ export class Qwen35Engine {
     return this._runBatchAndRead(basePos, n);
   }
   async runHiddenBatch(xs, basePos, snapshot = false) {
+    if (basePos + (xs.length / this.dims.dim) > this.maxSeq) throw new Error(`Context overflow: batch positions reach ${basePos + (xs.length / this.dims.dim)}, exceeding maxSeq ${this.maxSeq}`);
     if (!this.B) this._initBatch();
     const { dim } = this.dims;
     const n = xs.length / dim;
@@ -950,6 +955,7 @@ export class Qwen35Engine {
   }
 
   async prefillTokens(ids) {
+    if (this.pos + ids.length > this.maxSeq) throw new Error(`Context overflow: prefill tokens reach ${this.pos + ids.length}, exceeding maxSeq ${this.maxSeq}`);
     if (!this.B) this._initBatch();
     let i = 0, sinceSync = 0;
     const NC = this.NC;
@@ -1026,6 +1032,7 @@ export class Qwen35Engine {
   }
 
   async runHidden(xIn, pos) {
+    if (pos >= this.maxSeq) throw new Error(`Context overflow: position ${pos} exceeds maxSeq ${this.maxSeq}`);
     const { dim } = this.dims;
     this.pos = pos;
     this._setFrame(pos, pos + 1);
@@ -1059,6 +1066,7 @@ export class Qwen35Engine {
   // Whole token in one encoder + one submit; no hidden-state readback between
   // the last layer and the head (that round trip cost a full pipeline drain).
   async forwardToken(tokenId) {
+    if (this.pos >= this.maxSeq) throw new Error(`Context overflow: position ${this.pos} exceeds maxSeq ${this.maxSeq}`);
     const { vocab } = this.dims;
     this._setFrame(this.pos, this.pos + 1);
     this.device.queue.writeBuffer(this.x, 0, this._embedRowF32(tokenId));

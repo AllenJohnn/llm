@@ -40,6 +40,10 @@ export function gemmWGSL({ N = 16, T = 64, R = 2, KB = 2, splits = [2, 4, 8, 16]
     ? `(vec4<f32>(unpack4xU8(${m})) - vec4<f32>(8.0)) * ${s}`
     : `(vec4<f32>(f32(${m} & 0xFFu), f32((${m} >> 8u) & 0xFFu), f32((${m} >> 16u) & 0xFFu), f32(${m} >> 24u)) - vec4<f32>(8.0)) * ${s}`;
 
+  const dq8 = (m, s) => UNPACK
+    ? `vec4<f32>(unpack4xI8(${m})) * ${s}`
+    : `vec4<f32>(f32(bitcast<i32>(${m} << 24u) >> 24u), f32(bitcast<i32>(${m} << 16u) >> 24u), f32(bitcast<i32>(${m} << 8u) >> 24u), f32(bitcast<i32>(${m}) >> 24u)) * ${s}`;
+
   const kernel = (dIn, S) => {
     const nb = dIn / 32, nStages = nb / KB;
     if (nb % 2) throw new Error("gemm: dIn must be a multiple of 64 (f16 scales are paired)");
@@ -85,6 +89,57 @@ fn gemm_q4_${dIn}_s${S}(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_inv
 }`;
   };
 
+  const kernelQ8 = (dIn, S) => {
+    const nb = dIn / 32, nStages = nb / KB;
+    if (nb % 2) throw new Error("gemm: dIn must be a multiple of 64 (f16 scales are paired)");
+    if (nStages % S) throw new Error(`gemm: S=${S} must divide ${nStages} stages for dIn=${dIn}`);
+    const stPerWG = nStages / S;
+    const WV8 = TM * (KB * 2);
+    const WPT8 = WV8 / T;
+    return `
+@compute @workgroup_size(${T})
+fn gemm_q8_${dIn}_s${S}(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  let dOut = qb_shape.dOut;
+  let wgl = wg.y * 32768u + wg.x;                     // 2-D dispatch
+  let tile = wgl / ${S}u; let split = wgl % ${S}u;
+  let row0 = tile * ${TM}u; let st0 = split * ${stPerWG}u; let rb = row0 + t * ${R}u;
+  ${RR.map((r) => QN.map((q) => `var a${r}_${q} = vec4<f32>(0.0);`).join(" ")).join("\n  ")}
+  ${rng(WPT8).map((j) => `let li${j} = t + ${j * T}u; let lr${j} = min(row0 + li${j} / 4u, dOut - 1u); let lb${j} = li${j} % 4u;`).join("\n  ")}
+  ${rng(WPT8).map((j) => `var w${j} = gm_qs4[lr${j} * ${nb * 2}u + st0 * 4u + lb${j}];`).join("\n  ")}
+  ${rng(XPT).map((j) => `var xv${j} = gm_xT[st0 * ${XV}u + t + ${j * T}u];`).join("\n  ")}
+  for (var s: u32 = 0u; s < ${stPerWG}u; s++) {
+    workgroupBarrier();
+    ${rng(WPT8).map((j) => `gm_W[li${j}] = w${j};`).join(" ")}
+    ${rng(XPT).map((j) => `gm_X[t + ${j * T}u] = xv${j};`).join(" ")}
+    workgroupBarrier();
+    let bs = (st0 + s) * ${KB}u;
+    if (s + 1u < ${stPerWG}u) {                       // one-deep register prefetch
+      ${rng(WPT8).map((j) => `w${j} = gm_qs4[lr${j} * ${nb * 2}u + (st0 + s + 1u) * 4u + lb${j}];`).join(" ")}
+      ${rng(XPT).map((j) => `xv${j} = gm_xT[(st0 + s + 1u) * ${XV}u + t + ${j * T}u];`).join(" ")}
+    }
+    ${RR.map((r) => `let sw${r} = q4_sc[((min(rb + ${r}u, dOut - 1u) * ${nb}u + bs) >> 1u)];`).join("\n    ")}
+    ${rng(KB).map((b) => `
+    {
+      ${RR.map((r) => `let sv${r} = unpack2x16float(sw${r})[${b}u];`).join(" ")}
+      ${RR.map((r) => `let wa0_${r} = gm_W[(t * ${R}u + ${r}u) * 4u + ${b * 2}u]; let wa1_${r} = gm_W[(t * ${R}u + ${r}u) * 4u + ${b * 2 + 1}u];`).join("\n      ")}
+      ${rng(4).map((j) => `
+      { ${RR.map((r) => `let d0_${r} = ${dq8(`wa0_${r}[${j}]`, `sv${r}`)};`).join(" ")}
+        ${rng(4).map((i) => { const kl = 32 * b + 4 * j + i; return `
+        { ${QN.map((q) => `let xl${q} = gm_X[${kl * (N / 4) + q}u];`).join(" ")} ${RR.map((r) => QN.map((q) => `a${r}_${q} += d0_${r}[${i}] * xl${q};`).join(" ")).join(" ")} }`; }).join("")}
+      }`).join("")}
+      ${rng(4).map((j) => `
+      { ${RR.map((r) => `let d1_${r} = ${dq8(`wa1_${r}[${j}]`, `sv${r}`)};`).join(" ")}
+        ${rng(4).map((i) => { const kl = 32 * b + 16 + 4 * j + i; return `
+        { ${QN.map((q) => `let xl${q} = gm_X[${kl * (N / 4) + q}u];`).join(" ")} ${RR.map((r) => QN.map((q) => `a${r}_${q} += d1_${r}[${i}] * xl${q};`).join(" ")).join(" ")} }`; }).join("")}
+      }`).join("")}
+    }`).join("")}
+  }
+  let pb = split * ${N}u * dOut;                      // partials: p[split][col][dOut]
+  ${RR.map((r) => `if (rb + ${r}u < dOut) { ${QN.map((q) => rng(4).map((c) => `q4_y[pb + ${4 * q + c}u * dOut + rb + ${r}u] = a${r}_${q}[${c}];`).join(" ")).join(" ")} }`).join("\n  ")}
+}`;
+  };
+
   // Fixed-order split-K reduce. `_acc` folds the residual add in, exactly like
   // matvec_*_coop_b_acc. Writes into the engine's column-strided y layout.
   const reduce = (S, ACC) => `
@@ -112,17 +167,21 @@ fn gemm_xpose(@builtin(global_invocation_id) gid: vec3<u32>) {
   const seen = new Set();
   for (const [dIn, S] of want) {
     const key = `${dIn}:${S}`; if (seen.has(key)) continue; seen.add(key);
-    if (((dIn / 32) / KB) % S === 0) kernels.push(kernel(dIn, S));
+    if (((dIn / 32) / KB) % S === 0) {
+      kernels.push(kernel(dIn, S));
+      kernels.push(kernelQ8(dIn, S));
+    }
   }
   const usedSplits = [...new Set(want.map(([, S]) => S))];
+  const WV_MAX = Math.max(WV, TM * (KB * 2));
   return /* wgsl */ `
-// ---- row-stationary Q4_0 GEMM (N=${N}, T=${T}, R=${R}, KB=${KB}) ----
+// ---- row-stationary Q4_0 and Q8_0 GEMM (N=${N}, T=${T}, R=${R}, KB=${KB}) ----
 // Aliases of bindings already declared by the matvec kernels. Legal because no
 // entry point below references more than one view of the same binding.
-@group(1) @binding(0) var<storage, read> gm_qs4: array<vec4<u32>>;   // packed nibbles
+@group(1) @binding(0) var<storage, read> gm_qs4: array<vec4<u32>>;   // packed weights (Q4 nibbles or Q8 int8s)
 @group(1) @binding(0) var<storage, read> gm_p: array<f32>;           // split-K partials / xpose source
 @group(1) @binding(2) var<storage, read> gm_xT: array<vec4<f32>>;    // column-major activations
-var<workgroup> gm_W: array<vec4<u32>, ${WV}>;
+var<workgroup> gm_W: array<vec4<u32>, ${WV_MAX}>;
 var<workgroup> gm_X: array<vec4<f32>, ${XV}>;
 ${kernels.join("\n")}
 ${usedSplits.map((S) => reduce(S, false) + reduce(S, true)).join("\n")}

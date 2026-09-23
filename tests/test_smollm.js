@@ -2,11 +2,10 @@
 // usage: deno run --unstable-webgpu --allow-read test_deno.js
 import { parseSafetensors, makeTokenizer, DenseEngine, argmax } from "../engine/engine.js";
 
-const dir = new URL(".", import.meta.url).pathname;
-const cfg = JSON.parse(await Deno.readTextFile(dir + "../models/model/config.json"));
-const golden = JSON.parse(await Deno.readTextFile(dir + "./golden/golden.json"));
-const tok = makeTokenizer(JSON.parse(await Deno.readTextFile(dir + "../models/model/tokenizer.json")));
-const st = (await Deno.readFile(dir + "../models/model/model.safetensors")).buffer;
+const cfg = JSON.parse(await Deno.readTextFile(new URL("../models/model/config.json", import.meta.url)));
+const golden = JSON.parse(await Deno.readTextFile(new URL("./golden/golden.json", import.meta.url)));
+const tok = makeTokenizer(JSON.parse(await Deno.readTextFile(new URL("../models/model/tokenizer.json", import.meta.url))));
+const st = (await Deno.readFile(new URL("../models/model/model.safetensors", import.meta.url))).buffer;
 const tensors = parseSafetensors(st);
 
 const adapter = await navigator.gpu.requestAdapter();

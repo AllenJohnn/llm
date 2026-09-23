@@ -2,11 +2,10 @@
 import { makeTokenizer, DenseEngine, argmax } from "../engine/engine.js";
 import { parseGGUFHeader, ggufWeights } from "../engine/gguf.js";
 
-const dir = new URL(".", import.meta.url).pathname;
-const cfg = JSON.parse(await Deno.readTextFile(dir + "../models/qwen/config.json"));
-const golden = JSON.parse(await Deno.readTextFile(dir + "./golden/golden_qwen.json"));
-const tok = makeTokenizer(JSON.parse(await Deno.readTextFile(dir + "../models/qwen/tokenizer.json")));
-const raw = await Deno.readFile(dir + "../models/qwen/model.gguf");
+const cfg = JSON.parse(await Deno.readTextFile(new URL("../models/qwen/config.json", import.meta.url)));
+const golden = JSON.parse(await Deno.readTextFile(new URL("./golden/golden_qwen.json", import.meta.url)));
+const tok = makeTokenizer(JSON.parse(await Deno.readTextFile(new URL("../models/qwen/tokenizer.json", import.meta.url))));
+const raw = await Deno.readFile(new URL("../models/qwen/model.gguf", import.meta.url));
 const G = parseGGUFHeader(raw.buffer);
 const bytesOf = (info) => new Uint8Array(raw.buffer, info.byteOffset, info.byteLength);
 

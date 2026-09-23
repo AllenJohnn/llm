@@ -1,16 +1,15 @@
 // room/transport.js: slicing and reassembly are byte-exact, tolerate reordering and duplicates,
-// and keep every send under SLICE_BYTES.
-import { makeLink, sendFrame, SLICE_BYTES } from "../../room/transport.js";
+// keep every send under SLICE_BYTES, and recover lost slices with FEC on unordered channels.
+import { makeLink, sendFrame, SLICE_BYTES, attachWire } from "../../room/transport.js";
 
 function fakeChannels(link, n, sink) {
   for (let i = 0; i < n; i++) link.chans.push({ readyState: "open", send: (buf) => sink.push({ i, buf }) });
 }
 // receive() is module-private: attach a stub peer connection and drive its onmessage
-import { attachWire } from "../../room/transport.js";
-function receiver(onFrame) {
-  const link = makeLink(); let handler = null;
+function receiver(onFrame, opts = {}) {
+  const link = makeLink(opts); let handler = null;
   const pc = { createDataChannel: () => ({ set onmessage(f) { handler = f; }, set onclose(_) {}, readyState: "open" }) };
-  attachWire(link, { peerConnection: pc }, onFrame);
+  attachWire(link, { peerConnection: pc }, onFrame, opts);
   return (buf) => handler({ data: buf });
 }
 
@@ -42,7 +41,56 @@ for (const sh of shapes) {
     for (let i = 0; i < data.length; i++) if (got.data[i] !== data[i]) throw new Error("byte mismatch at " + i);
   });
 }
+
 Deno.test("transport refuses when no channel is open", () => {
   const link = makeLink(); link.chans.push({ readyState: "connecting", send() {} });
   if (sendFrame(link, { t: "ai-hidden", pos: 0, data: new Uint16Array(8) })) throw new Error("should refuse");
+});
+
+Deno.test("transport FEC recovers single dropped slice in each block", () => {
+  const data = new Uint16Array(dim * 4); // ~40 KB, spans multiple slices
+  for (let i = 0; i < data.length; i++) data[i] = (i * 31337 + 7) & 0xFFFF;
+  const link = makeLink({ ordered: false, fec: true });
+  const out = [];
+  fakeChannels(link, 4, out);
+  if (!sendFrame(link, { t: "ai-hidden-b", basePos: 100, n: 4, data })) throw new Error("send refused");
+
+  // We should have data slices plus at least 1 FEC parity slice
+  const nDataSlices = Math.ceil(data.byteLength / (SLICE_BYTES - 24));
+  if (out.length <= nDataSlices) throw new Error("FEC parity slice not emitted");
+
+  // Simulate loss: drop slice 1 (a middle data slice)
+  const simulated = out.filter((_, idx) => idx !== 1);
+  let got = null;
+  const deliver = receiver((m) => { got = m; }, { ordered: false, fec: true });
+
+  // Shuffle order to simulate unordered delivery over WebRTC
+  const shuffled = [...simulated].reverse();
+  for (const { buf } of shuffled) deliver(buf);
+
+  if (!got) throw new Error("frame not reconstructed despite FEC parity slice");
+  if (got.data.length !== data.length) throw new Error("length mismatch");
+  for (let i = 0; i < data.length; i++) {
+    if (got.data[i] !== data[i]) throw new Error(`byte mismatch at ${i} after FEC reconstruction`);
+  }
+});
+
+Deno.test("transport FEC tolerates lost parity slice when all data slices arrive", () => {
+  const data = new Uint16Array(dim * 2);
+  for (let i = 0; i < data.length; i++) data[i] = (i * 12345) & 0xFFFF;
+  const link = makeLink({ ordered: false, fec: true });
+  const out = [];
+  fakeChannels(link, 2, out);
+  sendFrame(link, { t: "ai-hidden", pos: 42, data });
+
+  // Drop the last slice (which is the FEC parity slice)
+  const simulated = out.slice(0, -1);
+  let got = null;
+  const deliver = receiver((m) => { got = m; }, { ordered: false, fec: true });
+  for (const { buf } of simulated) deliver(buf);
+
+  if (!got) throw new Error("frame not reassembled when only parity was dropped");
+  for (let i = 0; i < data.length; i++) {
+    if (got.data[i] !== data[i]) throw new Error(`byte mismatch at ${i}`);
+  }
 });

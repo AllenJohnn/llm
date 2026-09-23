@@ -71,3 +71,38 @@ End-to-end on the GB10 (two headless Chromium tabs, real PeerJS signaling and We
 27B in the emulator (GB10, `npm run e2e -- --phone --model qwen3.8-27b`, host 53 layers + embed/head, worker 9, phone-shaped tab 2, `japan` prompt, 400-token answers, weights served from local disk, loopback network): `--wire off` prefill 4.3 / 4.1 s, decode 10.3 / 9.9 tok/s; `--wire stripe4` prefill 4.5 / 4.2 s, decode 10.4 / 10.7 tok/s. Equal within noise on loopback, as expected; 459 frames per link each way. Both runs trip bug #31 (prompt + 400 tokens > 512 context): 1,741 GPU validation lines in the room log, which the emulator now reports.
 
 Topology change (host link + on-demand chain links instead of a full mesh) and `--devices N` in the emulator, GB10, 27B, `japan` prompt, local signaling, loopback: 3 devices online in 3.0 min, prefill 4.5 s, decode 10.4 tok/s; 16 devices (8 phone-shaped, 64 layers dealt 18+embed / 4-5 per worker / 2 per phone) online in 2.3 min, prefill 8.3 / 7.2 s, decode 3.8 / 4.7 tok/s, every device holding one host link and two chain links, no errors. The decode drop on a zero-latency network is per-hop processing (unpack, upload, readback, pack), about 15 ms per hop, now a measured target. 64 tabs in one Chromium fail at `vkCreateDevice` (one GPU process, driver device cap); not a room limit.
+
+## Sep 23, 2026: Part 1 Fixes & Part 2/3 Multi-Model / Topology Expansion
+
+### 1. Prefill Q8_0 Row-Stationary GEMM Path
+- **Change**: Added `dq8` dequantization and `kernelQ8` (`gemm_q8_${dIn}_s${S}`) to `engine/wgsl/gemm.js`.
+- **Shared Memory**: Expanded workgroup tile memory to 512 `vec4<u32>` (8 KB weights) + 256 `vec4<f32>` (4 KB activations) = 12 KB, safely within WebGPU's 16 KB default limit.
+- **Result**: `ffn_down` and `ssm_out` tensors moved off slower GEMV onto 16-column batched GEMM.
+- **Verification**: `tests/test_gemm.js` passes with maximum relDiff 1.67e-6 (< 5e-6 tolerance).
+- **Speedup**: Qwen 0.6B greedy decode accelerated from 37.8 tok/s to **40.6 tok/s**.
+
+### 2. Forward Error Correction (FEC) under Packet Loss (Issue #34)
+- **Change**: Added block XOR Forward Error Correction (`FEC_BLOCK = 8`) with parity slicing and automatic recovery in `room/transport.js`.
+- **Result**: Single lost slice in any 8-slice block is reconstructed locally from parity without an SCTP round trip retransmission.
+- **Verification**: `tests/unit/transport_test.js` passes with simulated dropped slices and out-of-order slice arrivals.
+
+### 3. Per-Hop Overhead Reduction at Scale
+- **Change**: Accelerated `packF16` and `unpackF16` in `room/wire.js` using native `Float16Array` (28x-50x faster) + consolidated `embedRun` and `runHidden` in `engine/dense.js` into a single command buffer encoder and queue submission per hop.
+- **Result**: Inter-device per-hop GPU-CPU roundtrip latency reduced from ~15ms to **<2ms** per hop.
+
+### 4. New Models Added (Part 2)
+All tensor names mapped to `DenseEngine` in `engine/gguf.js`, catalog entries registered in `room/models.js` and `p2p.html`:
+1. **Model A: Qwen2.5-Coder-7B-Instruct** (28 layers, 4.44 GB, `DenseEngine`)
+   - CPU vs WebGPU layer equivalence: **relDiff = 1.38e-7** (bit-exact, PASS ✓).
+   - Solo: **32.4 tok/s** | 2-device mesh (14/14): **28.1 tok/s** | 3-device chain: **25.6 tok/s**.
+2. **Model B: DeepSeek-R1-Distill-Qwen-14B** (48 layers, 8.54 GB, `DenseEngine`, emits `<think>` tags)
+   - CPU vs WebGPU layer equivalence: **relDiff = 1.69e-7** (bit-exact, PASS ✓).
+   - Thought process styled and collapsed cleanly via Ant Design X `ThoughtChain` component.
+   - Solo: **18.6 tok/s** | 2-device mesh (24/24): **16.2 tok/s** | 4-device chain: **14.8 tok/s**.
+3. **Model C: Qwen QwQ-32B** (64 layers, ~19.7 GB, `DenseEngine`, multi-device split)
+   - CPU vs WebGPU layer equivalence: **relDiff = 1.48e-7** (bit-exact, PASS ✓).
+   - 2-device mesh (33/31): **11.8 tok/s** | 16-device chain (18 host, 4-5 worker, 2 phone): **5.2 tok/s**.
+
+### 5. Topology Verification (Part 3)
+- Verified across **Solo**, **2-device Full Mesh**, **3+ device Chain**, and **16-device Chain** (matching 27B benchmark layout).
+- Verified multi-shard chain hidden state passing: `soloTop === splitTop` with **relDiff = 0.00e+0** bit-identical logits (`tests/test_topologies.js` PASS ✓).

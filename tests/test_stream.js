@@ -1,5 +1,5 @@
 import { parseGGUFHeader, q4Repack, q8Repack, streamEntryToGPU, GGML_Q4_0, GGML_Q8_0 } from "../engine/gguf.js";
-const path = Deno.env.get("GGUF") || "../models/qwen/model.gguf";
+const path = Deno.env.get("GGUF") || new URL("../models/qwen/model.gguf", import.meta.url);
 const fh = await Deno.open(path);
 const readAt = async (off, len) => { const out = new Uint8Array(len); let got = 0; while (got < len) { const n = await fh.read(out.subarray(got)); if (n === null) break; got += n; } return out; };
 const hdrBuf = await (async () => { await fh.seek(0, Deno.SeekMode.Start); return readAt(0, 64 << 20); })();

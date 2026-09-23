@@ -2,19 +2,32 @@ import { MODELS, NEED_GB, LOCAL_CANDIDATES, detectLocalModel } from "../../room/
 
 const assert = (cond, msg) => { if (!cond) throw new Error(msg || "assertion failed"); };
 
-Deno.test("models: catalog has all 7 expected models", () => {
-  const expected = ["qwen3-0.6b", "qwen3-1.7b", "qwen3-4b", "qwen2.5-coder-1.5b", "phi-4-mini", "qwen3.8-27b", "smollm-135m"];
+Deno.test("models: catalog has all 10 expected models", () => {
+  const expected = [
+    "qwen3-0.6b", "qwen3-1.7b", "qwen3-4b", "qwen2.5-coder-1.5b",
+    "qwen2.5-coder-7b", "deepseek-r1-distill-qwen-14b", "qwq-32b",
+    "phi-4-mini", "qwen3.8-27b", "smollm-135m"
+  ];
   for (const k of expected) {
     assert(MODELS[k], `Missing model key: ${k}`);
     assert(NEED_GB[k] > 0, `Missing NEED_GB for: ${k}`);
   }
 });
 
-Deno.test("models: Qwen2.5 Coder uses the fast mirror and has an HF fallback", () => {
+Deno.test("models: Qwen2.5 Coder 1.5B uses the fast mirror and has an HF fallback", () => {
   const m = MODELS["qwen2.5-coder-1.5b"];
   assert(m.gguf.startsWith("https://hf-mirror.com/"), "Qwen2.5 Coder should prefer the fast mirror");
   assert(m.ggufFallback.startsWith("https://huggingface.co/"), "Qwen2.5 Coder fallback URL missing");
   assert(NEED_GB["qwen2.5-coder-1.5b"] >= 1.5, "Qwen2.5 Coder memory pledge missing");
+});
+
+Deno.test("models: added models have valid GGUF URLs and layer configs", () => {
+  const m7b = MODELS["qwen2.5-coder-7b"];
+  assert(m7b && m7b.gguf.includes("Qwen2.5-Coder-7B-Instruct-Q4_0.gguf"), "7B Coder URL missing");
+  const m14b = MODELS["deepseek-r1-distill-qwen-14b"];
+  assert(m14b && m14b.gguf.includes("DeepSeek-R1-Distill-Qwen-14B-Q4_0.gguf") && m14b.thinking, "14B R1 URL or thinking missing");
+  const m32b = MODELS["qwq-32b"];
+  assert(m32b && m32b.gguf.includes("Qwen_QwQ-32B-Q4_0.gguf") && m32b.thinking, "32B QwQ URL or thinking missing");
 });
 
 Deno.test("models: Phi-4 mini uses Phi3 GGUF path and fits a multi-GB room", () => {

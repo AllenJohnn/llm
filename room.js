@@ -821,7 +821,8 @@ async function rangeFetch(url, lo, hi, noCache = false) {
       }
     } catch {}
   }
-  const headers = { Range: `bytes=${lo}-${hi}`, "ngrok-skip-browser-warning": "1" };
+  const headers = { Range: `bytes=${lo}-${hi}` };
+  if (url.includes("ngrok")) headers["ngrok-skip-browser-warning"] = "1";
   const model = MODELS[ai.model];
   const requestUrl = url.startsWith("https://hf-mirror.com/") && model?.ggufFallback && model.gguf === model.ggufFallback
     ? model.ggufFallback : url;
@@ -1277,18 +1278,35 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
   ai.myPct = 0;
   ai.prog = { [myName]: 0 }; ai.progAt = { [myName]: Date.now() };
   const streamOpts = { pace: isPhone ? 300 : 0, staging: isPhone ? 2 * 2 ** 20 : 8 * 2 ** 20 };
-  if (M.cfg) {
-    ai.cfg = await (await fetch(M.cfg)).json();
-    if (M.arch === "phi3") {
-      ai.cfg.head_dim = ai.cfg.head_dim || ai.cfg.hidden_size / ai.cfg.num_attention_heads;
-      ai.cfg.rope_dim = Math.floor(ai.cfg.head_dim * (ai.cfg.partial_rotary_factor || 0.75));
+  if (M.cfg && !ai.cfg) {
+    try {
+      ai.cfg = await (await fetch(M.cfg)).json();
+    } catch (e) {
+      console.warn("Could not fetch remote config.json, using GGUF header:", e);
+      const G = ai.G && ai.GModel === modelKey ? ai.G : await fetchGGUFHeader(M.gguf, false);
+      ai.G = G; ai.GModel = modelKey;
+      const L = G.meta["qwen2.block_count"] || G.meta["phi3.block_count"] || G.meta["llama.block_count"] || 28;
+      ai.cfg = { num_hidden_layers: L };
     }
-    if (hasEmbed || hasHead) {
-      if (M.arch === "phi3") {
+  }
+  if (ai.cfg && M.arch === "phi3") {
+    ai.cfg.head_dim = ai.cfg.head_dim || ai.cfg.hidden_size / ai.cfg.num_attention_heads;
+    ai.cfg.rope_dim = Math.floor(ai.cfg.head_dim * (ai.cfg.partial_rotary_factor || 0.75));
+  }
+  if (hasEmbed || hasHead) {
+    if (M.arch === "phi3" || !M.tok) {
+      const tokenHeader = ai.G && ai.GModel === modelKey && ai.G.meta["tokenizer.ggml.tokens"] ? ai.G : await fetchGGUFHeader(M.gguf, true);
+      ai.G = tokenHeader; ai.GModel = modelKey;
+      ai.tok = makeTokenizer(tokenizerFromGGUF(tokenHeader.meta));
+    } else {
+      try {
+        ai.tok = makeTokenizer(await (await fetch(M.tok)).json());
+      } catch (e) {
+        console.warn("Could not fetch remote tokenizer.json, reading from GGUF:", e);
         const tokenHeader = ai.G && ai.GModel === modelKey && ai.G.meta["tokenizer.ggml.tokens"] ? ai.G : await fetchGGUFHeader(M.gguf, true);
         ai.G = tokenHeader; ai.GModel = modelKey;
         ai.tok = makeTokenizer(tokenizerFromGGUF(tokenHeader.meta));
-      } else ai.tok = makeTokenizer(await (await fetch(M.tok)).json());
+      }
     }
   }
 
@@ -1435,8 +1453,14 @@ async function aiStart(modelArg) {
       layerBytes = qwen35ShardBytes(ai.G, { lo: 0, hi: 4, hasEmbed: false, hasHead: false }) / 4;
       embedBytes = (ai.G.tensors[GGML_EMBED]?.byteLength || 0) + (ai.G.tensors[GGML_OUTPUT]?.byteLength || 0) + qwen35MtpBytes(ai.G);
     } else {
-      cfg = await (await fetch(M.cfg)).json();
-      L = cfg.num_hidden_layers;
+      try {
+        cfg = await (await fetch(M.cfg)).json();
+        L = cfg.num_hidden_layers;
+      } catch (e) {
+        console.warn('Could not fetch remote config, using default/meta:', e);
+        L = 28;
+        cfg = { num_hidden_layers: L };
+      }
     }
 
     // real per-shard byte costs (gguf: from the file's own index)
@@ -1660,9 +1684,10 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
   let autoContinuation = null;
   try {
     // the prompt must fit the context with room for an answer; never silently truncate
-    if (ids.length > MAX_SEQ - MIN_ROOM)
-      throw new Error(`prompt is ${ids.length} tokens; this room's context is ${MAX_SEQ} tokens and an answer needs at least ${MIN_ROOM}. Shorten the prompt.`);
-    const maxNew = Math.min(MAX_NEW, MAX_SEQ - ids.length);   // answer cap for this prompt
+    const maxContext = Math.min(MAX_SEQ, ai.engine?.maxSeq || MAX_SEQ);
+    if (ids.length > maxContext - MIN_ROOM)
+      throw new Error(`prompt is ${ids.length} tokens; this room's context is ${maxContext} tokens and an answer needs at least ${MIN_ROOM}. Shorten the prompt.`);
+    const maxNew = Math.min(MAX_NEW, maxContext - ids.length);   // answer cap for this prompt
     let capped = false;   // set when generation stops because the context filled up
     let logits = null;
     const tPre = performance.now();
@@ -1796,7 +1821,7 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
         // a speculative step touches positions pos .. pos+K (K drafts verified in one pass) and
         // drafts one more; shrink K near the end of the context and stop before it overflows
         let K = pickK();
-        const roomLeft = MAX_SEQ - ai.engine.pos - 2;
+        const roomLeft = maxContext - ai.engine.pos - 2;
         if (roomLeft < 1) { capped = true; break; }
         K = Math.min(K, roomLeft, maxNew - count + 1);
         const tStep = performance.now();
@@ -1825,7 +1850,7 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
         if (eosIds.has(next)) { hitEos = true; await aiPipeToken(next, false); break; }
         emit(next);
         recentTokens.push(next);
-        if (ai.pos >= MAX_SEQ - 1 || i === maxNew - 1) { capped = true; break; }   // no position left for another token
+        if (ai.pos >= maxContext - 1 || i === maxNew - 1 || count >= maxNew) { capped = true; break; }   // no position left for another token
         logits = await aiPipeToken(next);
       }
       if (!hitEos && !capped && count >= maxNew) capped = true;
