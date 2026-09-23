@@ -10,8 +10,8 @@ import { WIRE_F16, badF32, f32ToB64, packF16, unpackF16, asU16, packWire, unpack
 import { esc, md } from "./room/markdown.js";
 import { aiSample } from "./room/sampling.js";
 import { chatRecipients } from "./room/visibility.js";
-import { MODELS, NEED_GB, MAX_SEQ, MAX_NEW, MIN_ROOM } from "./room/models.js";
-import { makeLink, attachWire, wireReady, sendFrame } from "./room/transport.js";
+import { MODELS, NEED_GB, MAX_SEQ, MAX_NEW, MIN_ROOM, detectLocalModel } from "./room/models.js";
+import { makeLink, attachWire, wireReady, sendFrame, resetLink } from "./room/transport.js";
 
 // Hidden-state transport (room/transport.js). ?wire=off falls back to PeerJS messages;
 // ?wire=slice uses one sliced channel; ?wire=stripeN spreads slices over N peer connections.
@@ -408,6 +408,9 @@ function wire(conn, name, meta, initiator = false) {
           else if (typeof waiter === "function") waiter(null);
         }
       }
+      if (isHost && ai.role === "host" && ai.engine) {
+        aiMaybeReady();
+      }
     }
     if (isHost) {   // on the host a closed link means the device left; workers wait for the roster
       dropCard(conn.peer); members.delete(conn.peer); roster.delete(conn.peer); broadcastRoster();
@@ -498,16 +501,6 @@ function onData(from, d) {
         aiRejoin(from, d.name);
         if (ai.visibility !== "all") sendTo(from, { t: "ai-visibility", mode: ai.visibility });
       }
-      break;
-    case "ai-next": ai.next = d.next; ensureLink(d.next); break;
-    case "ai-reset": try { ai.engine?.reset?.(); } catch {} break;
-    case "ai-layers": ai.layersByName = d.by; loadCardRender(); break;
-    case "ai-start-req":
-      if (MODELS[d.model]) $("ai-model").value = d.model;   // every screen shows the model that was actually started
-      $("ai-start").disabled = true; $("ai-model").disabled = true;
-      if (d.boss !== peer.id) { aiLoading(true, `starting ${MODELS[d.model]?.label.split("\u00b7")[0].trim()}`); $("ldg-sub").textContent = `${d.by} pressed start`; $("ldg-fill").style.width = "0%"; }
-      if (d.boss === peer.id) { toast(`${d.by} started ${MODELS[d.model]?.label.split("\u00b7")[0].trim()}`); aiStart(d.model); }
-      else aiStatus(`${d.by} started the model\u2026`);
       break;
     case "roster": {
       // the host's view of the room: draw a card per device, no mesh connections
@@ -828,15 +821,33 @@ async function rangeFetch(url, lo, hi, noCache = false) {
       }
     } catch {}
   }
-  const r = await fetch(url, { headers: { Range: `bytes=${lo}-${hi}` } });
-  if (r.status !== 206) throw new Error("model host refused range requests");
-  if (c && !myMeta?.phone) {   // phones skip the store (no spare RAM for the copy); Cache API refuses 206s, so store as a plain 200
+  const headers = { Range: `bytes=${lo}-${hi}`, "ngrok-skip-browser-warning": "1" };
+  const model = MODELS[ai.model];
+  const requestUrl = url.startsWith("https://hf-mirror.com/") && model?.ggufFallback && model.gguf === model.ggufFallback
+    ? model.ggufFallback : url;
+  let r;
+  try { r = await fetch(requestUrl, { headers }); } catch (err) {
+    if (!url.startsWith("https://hf-mirror.com/") || !model?.ggufFallback) throw err;
+    r = await fetch(model.ggufFallback, { headers });
+    if (r.status === 206) model.gguf = model.ggufFallback;
+    else throw new Error("fast mirror and Hugging Face fallback both failed (HTTP " + r.status + ")");
+  }
+  if (url.startsWith("https://hf-mirror.com/") && requestUrl === url && r.status !== 206) {
+    if (model?.ggufFallback) {
+      const fallback = await fetch(model.ggufFallback, { headers });
+      if (fallback.status === 206) { r = fallback; model.gguf = model.ggufFallback; }
+      else throw new Error("fast mirror and Hugging Face fallback both failed (HTTP " + fallback.status + ")");
+    }
+  }
+  if (r.status !== 206 && r.status !== 200) throw new Error("model host refused range requests (HTTP " + r.status + ")");
+  const isLocal = url.startsWith("/") || url.includes("://127.0.0.1") || url.includes("://localhost");
+  if (c && !myMeta?.phone && !isLocal) {   // phones skip the store; local files don't need cache
     try {
       // buffer the copy fully first, so a complete body is the only thing that ever gets stored
       r.clone().arrayBuffer().then((buf) => {
         if (buf.byteLength !== hi - lo + 1) return;
         return c.put(key, new Response(buf, { status: 200, headers: { "content-type": "application/octet-stream", "x-swarm-len": String(buf.byteLength) } }));
-      }).then(() => { ai.cachedBytes = (ai.cachedBytes || 0) + (hi - lo + 1); }, () => {});
+      }).then(() => { ai.cachedBytes = (ai.cachedBytes || 0) + (hi - lo + 1); }).catch(() => {});
     } catch {}
   }
   return r;
@@ -851,13 +862,16 @@ async function fetchGGUFHeader(url, needTokenizer = true) {
   }
 }
 let pacerHook = null;
-const streamWithRetry = (url, streamOpts) => async (info) => {
-  try { return await streamEntryToGPU(ai.device, info, openRangeOf(url), streamOpts); }
+const streamWithRetry = (url, streamOpts) => async (info, onProgress) => {
+  let received = 0;
+  const report = (n) => { received += n; onProgress?.(n); };
+  try { return await streamEntryToGPU(ai.device, info, openRangeOf(url), streamOpts, report); }
   catch (e) {
     if (!/short tensor/.test(String(e))) throw e;
+    if (received) { report(-received); received = 0; }
     const c = await getWeightCache();
     if (c) c.delete(cacheKey(url, info.byteOffset, info.byteOffset + info.byteLength - 1)).catch(() => {});
-    return streamEntryToGPU(ai.device, info, (i) => rangeFetch(url, i.byteOffset, i.byteOffset + i.byteLength - 1, true), streamOpts);
+    return streamEntryToGPU(ai.device, info, (i) => rangeFetch(url, i.byteOffset, i.byteOffset + i.byteLength - 1, true), streamOpts, report);
   }
 };
 const openRangeOf = (url) => async (info) => {
@@ -865,17 +879,32 @@ const openRangeOf = (url) => async (info) => {
   crumb("streaming " + info.name + " (" + (info.byteLength / 2 ** 20).toFixed(0) + " MB)");
   return rangeFetch(url, info.byteOffset, info.byteOffset + info.byteLength - 1);
 };
-const rangeBytesOf = (url) => async (info) => {
+const rangeBytesOf = (url) => async (info, onProgress = () => {}) => {
   if (pacerHook) await pacerHook();
   crumb("fetching " + info.name + " (" + (info.byteLength / 2 ** 20).toFixed(0) + " MB)");
+  const read = async (r, report) => {
+    const bytes = new Uint8Array(info.byteLength);
+    const reader = r.body.getReader();
+    let offset = 0;
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (offset + value.byteLength > bytes.length) throw new Error(`oversized download for ${info.name}`);
+      bytes.set(value, offset); offset += value.byteLength; report(value.byteLength);
+    }
+    return { bytes, offset };
+  };
+  let received = 0;
+  const report = (n) => { received += n; onProgress(n); };
   let r = await rangeFetch(url, info.byteOffset, info.byteOffset + info.byteLength - 1);
-  let bytes = new Uint8Array(await r.arrayBuffer());
-  if (bytes.length !== info.byteLength) {
+  let result = await read(r, report);
+  if (result.offset !== info.byteLength) {
+    if (received) { report(-received); received = 0; }
     r = await rangeFetch(url, info.byteOffset, info.byteOffset + info.byteLength - 1, true);
-    bytes = new Uint8Array(await r.arrayBuffer());
-    if (bytes.length !== info.byteLength) throw new Error(`short download for ${info.name}: ${bytes.length}/${info.byteLength} bytes`);
+    result = await read(r, report);
+    if (result.offset !== info.byteLength) throw new Error(`short download for ${info.name}: ${result.offset}/${info.byteLength} bytes`);
   }
-  return bytes;
+  return result.bytes;
 };
 
 // ai state is initialized at top of module
@@ -915,53 +944,298 @@ function aiProgress(done, total, note) {
   $("ldg-sub").textContent = `${(done / 2 ** 20).toFixed(0)} MB of ${(total / 2 ** 20).toFixed(0)} MB · ${pct}%` + (note ? " · " + note : "");
   updateTopbarDownload(true, done, total, note);
 }
+function formatTime() {
+  return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function getInitials(name) {
+  if (!name) return "U";
+  const clean = name.trim().replace(/^peer-|^host-/, "");
+  if (clean.length <= 2) return clean.toUpperCase();
+  const parts = clean.split(/[\s-_]+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return clean.slice(0, 2).toUpperCase();
+}
+
+function setSendButtonState(state) {
+  const btn = $("ai-send");
+  if (!btn) return;
+  const isStop = state === "stop";
+  btn.classList.toggle("stop-mode", isStop);
+  btn.title = isStop ? "Stop generation" : "Send message (Enter)";
+  const label = btn.querySelector(".btn-label");
+  if (label) {
+    label.textContent = isStop ? "Stop" : "Send";
+  } else {
+    btn.textContent = isStop ? "Stop" : "Send";
+  }
+  const icon = btn.querySelector(".send-icon") || btn.querySelector("svg");
+  if (icon) {
+    if (isStop) {
+      icon.innerHTML = `<rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor"/>`;
+    } else {
+      icon.innerHTML = `<path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" fill="currentColor"/>`;
+    }
+  }
+}
+
+function renderWelcomePrompts() {
+  const empty = $("ai-empty");
+  if (!empty) return;
+  const o = $("ai-output");
+  if (o && o.children.length > 0) {
+    empty.style.display = "none";
+    return;
+  }
+  const n = ai.chain ? ai.chain.length + 1 : 1;
+  const modelLabel = MODELS[ai.model]?.label.split("\u00b7")[0].trim() || "Model";
+  empty.innerHTML = `
+    <div class="welcome-container">
+      <div class="welcome-badge">
+        <span class="welcome-dot"></span>
+        <span>CLUSTER READY · ${n} DEVICE${n > 1 ? "S" : ""} ONLINE</span>
+      </div>
+      <h2 class="welcome-title">Welcome to <span>swarmLLM</span></h2>
+      <p class="welcome-desc">Distributed WebGPU cluster running <strong>${esc(modelLabel)}</strong>. Every token is computed across all GPUs in the room.</p>
+      <div class="prompts-grid">
+        <button class="prompt-card" type="button" onclick="window.usePromptSuggestion('Write a playable single-file Flappy Bird game in HTML and Canvas with smooth physics.')">
+          <span class="prompt-icon">🎮</span>
+          <span class="prompt-text">
+            <strong>Flappy Bird Game</strong>
+            <small>Playable single-file canvas game</small>
+          </span>
+        </button>
+        <button class="prompt-card" type="button" onclick="window.usePromptSuggestion('Explain pipeline-parallel tensor sharding and speculative decoding across WebRTC in simple terms.')">
+          <span class="prompt-icon">⚡</span>
+          <span class="prompt-text">
+            <strong>WebGPU Sharding</strong>
+            <small>How peer devices share model layers</small>
+          </span>
+        </button>
+        <button class="prompt-card" type="button" onclick="window.usePromptSuggestion('Create a production-ready async FastAPI service in Python with rate limiting and background tasks.')">
+          <span class="prompt-icon">🚀</span>
+          <span class="prompt-text">
+            <strong>Python FastAPI</strong>
+            <small>Async API with rate limiting</small>
+          </span>
+        </button>
+        <button class="prompt-card" type="button" onclick="window.usePromptSuggestion('Write a creative sci-fi micro-story about decentralized intelligences waking up across the globe.')">
+          <span class="prompt-icon">✨</span>
+          <span class="prompt-text">
+            <strong>Sci-Fi Story</strong>
+            <small>Decentralized machines awakening</small>
+          </span>
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+// Global action handlers for Ant Design X components
+window.copyCode = function(btn) {
+  const codeBlock = btn.closest(".code-block");
+  if (!codeBlock) return;
+  const codeEl = codeBlock.querySelector("code");
+  const text = codeEl ? codeEl.innerText : "";
+  navigator.clipboard.writeText(text).then(() => {
+    const textSpan = btn.querySelector(".copy-text");
+    if (textSpan) textSpan.textContent = "Copied!";
+    btn.classList.add("copied");
+    setTimeout(() => {
+      if (textSpan) textSpan.textContent = "Copy";
+      btn.classList.remove("copied");
+    }, 2000);
+  }).catch(() => {
+    toast("Could not copy code");
+  });
+};
+
+window.copyMessage = function(btn, explicitRaw) {
+  let text = explicitRaw;
+  if (!text) {
+    const m = btn.closest(".m");
+    const content = m ? (m.querySelector(".bubble-content") || m.querySelector(".bubble")) : null;
+    text = content ? content.innerText : "";
+  }
+  if (text) {
+    const clean = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+    if (clean) text = clean;
+  }
+  navigator.clipboard.writeText(text).then(() => {
+    const span = btn.querySelector("span");
+    if (span) span.textContent = "Copied!";
+    btn.classList.add("copied");
+    toast("Response copied to clipboard");
+    setTimeout(() => {
+      if (span) span.textContent = "Copy";
+      btn.classList.remove("copied");
+    }, 2000);
+  }).catch(() => {
+    toast("Could not copy response");
+  });
+};
+
+window.feedbackMessage = function(btn, type) {
+  const bar = btn.closest(".actions-bar");
+  if (bar) {
+    bar.querySelectorAll(".feedback-btn").forEach((b) => b.classList.remove("active"));
+  }
+  btn.classList.toggle("active");
+  toast(type === "up" ? "Thanks for the feedback!" : "Feedback recorded");
+};
+
+window.retryLastPrompt = function() {
+  if (!ai.lastPrompt) {
+    toast("No previous prompt to retry");
+    return;
+  }
+  if (ai.busy === "gen") {
+    toast("Generation is already running");
+    return;
+  }
+  $("ai-prompt").value = ai.lastPrompt;
+  const el = $("ai-prompt");
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, 120) + "px";
+  aiSubmit();
+};
+
+window.usePromptSuggestion = function(text) {
+  if (ai.busy === "gen") return;
+  const el = $("ai-prompt");
+  if (!el) return;
+  el.value = text;
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, 120) + "px";
+  aiSubmit();
+};
+
 function aiOut() { const o = $("ai-output"); o.style.display = "block"; $("ai-empty").style.display = "none"; return o; }
 let botEl = null;
 function chatUser(name, text) {
   const o = aiOut();
   const m = document.createElement("div");
   m.className = "m user";
-  m.innerHTML = `<div class="who">${esc(name)}</div><div class="bubble">${esc(text)}</div>`;
-  o.appendChild(m); o.scrollTop = o.scrollHeight;
+  const initials = getInitials(name);
+  const time = formatTime();
+  m.innerHTML = `
+    <div class="msg-header">
+      <span class="who">${esc(name)}</span>
+      <span class="msg-time">${time}</span>
+    </div>
+    <div class="msg-body">
+      <div class="bubble">${esc(text)}</div>
+      <div class="user-avatar" title="${esc(name)}">${esc(initials)}</div>
+    </div>`;
+  o.appendChild(m);
+  o.scrollTop = o.scrollHeight;
 }
 function chatBotStart() {
   const o = aiOut();
   const m = document.createElement("div");
-  m.className = "m bot";
-  m.innerHTML = `<div class="who">swarm</div><div class="bubble"><span class="cursor"></span></div>`;
-  o.appendChild(m); o.scrollTop = o.scrollHeight;
+  m.className = "m bot streaming";
+  const modelLabel = MODELS[ai.model]?.label.split("\u00b7")[0].trim() || "Mesh";
+  const time = formatTime();
+  m.innerHTML = `
+    <div class="msg-header">
+      <div class="bot-avatar" title="SwarmLLM Mesh">
+        <svg class="bot-mesh-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+          <polyline points="2 17 12 22 22 17"></polyline>
+          <polyline points="2 12 12 17 22 12"></polyline>
+        </svg>
+      </div>
+      <span class="who">swarmLLM</span>
+      <span class="model-badge">${esc(modelLabel)}</span>
+      <span class="msg-time">${time}</span>
+    </div>
+    <div class="msg-body">
+      <div class="bubble"><div class="bubble-content"><span class="cursor"></span></div></div>
+    </div>`;
+  o.appendChild(m);
+  o.scrollTop = o.scrollHeight;
   botEl = m;
 }
 function chatBotUpdate(raw) {
   if (!botEl) chatBotStart();
-  botEl.querySelector(".bubble").innerHTML = md(raw) + '<span class="cursor"></span>';
+  const contentEl = botEl.querySelector(".bubble-content") || botEl.querySelector(".bubble");
+  contentEl.innerHTML = md(raw, true) + '<span class="cursor"></span>';
+  const thoughtContent = contentEl.querySelector(".thought-chain[open] .thought-content");
+  if (thoughtContent) thoughtContent.scrollTop = thoughtContent.scrollHeight;
   $("ai-output").scrollTop = $("ai-output").scrollHeight;
 }
 function chatBotEnd(raw, stats, capped = false) {
   if (!botEl) chatBotStart();
-  botEl.querySelector(".bubble").innerHTML = md(raw);
-  if (stats) { const s = document.createElement("div"); s.className = "stats"; s.textContent = stats; botEl.appendChild(s); }
+  botEl.classList.remove("streaming");
+  const contentEl = botEl.querySelector(".bubble-content") || botEl.querySelector(".bubble");
+  contentEl.innerHTML = md(raw, false);
+
+  const actionsBar = document.createElement("div");
+  actionsBar.className = "actions-bar";
+
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "action-btn copy-msg-btn";
+  copyBtn.title = "Copy response";
+  copyBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6zM2 5a1 1 0 0 0-1 1v8a2 2 0 0 0 2 2h6a1 1 0 0 0 1-1v-1H3a2 2 0 0 1-2-2V5H2z"/></svg><span>Copy</span>`;
+  copyBtn.onclick = () => window.copyMessage(copyBtn, raw);
+  actionsBar.appendChild(copyBtn);
+
+  const thumbUp = document.createElement("button");
+  thumbUp.className = "action-btn feedback-btn";
+  thumbUp.title = "Good response";
+  thumbUp.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>`;
+  thumbUp.onclick = () => window.feedbackMessage(thumbUp, "up");
+  actionsBar.appendChild(thumbUp);
+
+  const thumbDown = document.createElement("button");
+  thumbDown.className = "action-btn feedback-btn";
+  thumbDown.title = "Poor response";
+  thumbDown.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3"></path></svg>`;
+  thumbDown.onclick = () => window.feedbackMessage(thumbDown, "down");
+  actionsBar.appendChild(thumbDown);
+
+  if (ai.lastPrompt) {
+    const retryBtn = document.createElement("button");
+    retryBtn.className = "action-btn retry-btn";
+    retryBtn.title = "Retry last prompt";
+    retryBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg><span>Retry</span>`;
+    retryBtn.onclick = () => window.retryLastPrompt();
+    actionsBar.appendChild(retryBtn);
+  }
+
   if (capped && raw) {
-    const btn = document.createElement("button");
-    btn.className = "ai-continue-btn";
-    btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-1px;margin-right:4px"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zM4.5 7.5a.5.5 0 0 0 0 1h5.793l-2.147 2.146a.5.5 0 0 0 .708.708l3-3a.5.5 0 0 0 0-.708l-3-3a.5.5 0 1 0-.708.708L10.293 7.5H4.5z"/></svg>Continue answer`;
-    btn.onclick = () => {
-      const tail = raw.trim().slice(-120);
-      const prompt = `Please continue your response directly from where you stopped: "…${tail}"`;
+    const contBtn = document.createElement("button");
+    contBtn.className = "action-btn continue-btn";
+    contBtn.title = "Continue answer";
+    contBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zM4.5 7.5a.5.5 0 0 0 0 1h5.793l-2.147 2.146a.5.5 0 0 0 .708.708l3-3a.5.5 0 0 0 0-.708l-3-3a.5.5 0 1 0-.708.708L10.293 7.5H4.5z"/></svg><span>Continue</span>`;
+    contBtn.onclick = () => {
+      const tail = raw.trim().slice(-1600);
+      const prompt = `Continue answering this original request: ${ai.lastPrompt || "continue the previous answer"}\nContinue immediately after the excerpt below. Do not repeat it. If this is code, keep it as one complete file and finish any unfinished blocks. Output only the continuation.\n\n${tail}`;
       $("ai-prompt").value = prompt;
       const el = $("ai-prompt");
       el.style.height = "auto";
       el.style.height = Math.min(el.scrollHeight, 120) + "px";
       aiSubmit();
     };
-    botEl.appendChild(btn);
+    actionsBar.appendChild(contBtn);
   }
+
+  if (stats) {
+    const s = document.createElement("span");
+    s.className = "stats-badge";
+    s.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg><span>${esc(stats)}</span>`;
+    actionsBar.appendChild(s);
+  }
+
+  botEl.appendChild(actionsBar);
   botEl = null;
+  $("ai-output").scrollTop = $("ai-output").scrollHeight;
 }
 
 
 async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
   const M = MODELS[modelKey];
+  ai.model = modelKey;
   aiLoading(true, `downloading layers ${range[0]}\u2013${range[1] - 1} of ${M.label.split("\u00b7")[0].trim()}`);
   aiStatus("requesting GPU\u2026");
   mascot("Grabbing my slice of the model… hang tight.");
@@ -1005,10 +1279,24 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
   const streamOpts = { pace: isPhone ? 300 : 0, staging: isPhone ? 2 * 2 ** 20 : 8 * 2 ** 20 };
   if (M.cfg) {
     ai.cfg = await (await fetch(M.cfg)).json();
-    if (hasEmbed || hasHead) ai.tok = makeTokenizer(await (await fetch(M.tok)).json());
+    if (M.arch === "phi3") {
+      ai.cfg.head_dim = ai.cfg.head_dim || ai.cfg.hidden_size / ai.cfg.num_attention_heads;
+      ai.cfg.rope_dim = Math.floor(ai.cfg.head_dim * (ai.cfg.partial_rotary_factor || 0.75));
+    }
+    if (hasEmbed || hasHead) {
+      if (M.arch === "phi3") {
+        const tokenHeader = ai.G && ai.GModel === modelKey && ai.G.meta["tokenizer.ggml.tokens"] ? ai.G : await fetchGGUFHeader(M.gguf, true);
+        ai.G = tokenHeader; ai.GModel = modelKey;
+        ai.tok = makeTokenizer(tokenizerFromGGUF(tokenHeader.meta));
+      } else ai.tok = makeTokenizer(await (await fetch(M.tok)).json());
+    }
   }
 
+  let lastProgressDone = -1, lastProgressAt = 0;
   const onProg = (done, total) => {
+    const now = Date.now();
+    if (done < total && done - lastProgressDone < 4 * 2 ** 20 && now - lastProgressAt < 400) return;
+    lastProgressDone = done; lastProgressAt = now;
     aiProgress(done, total);
     aiStatus(cacheHits > done * 0.5 ? `loading weights from this device's cache\u2026` : `downloading weights\u2026`);
     ai.myPct = total ? done / total * 100 : 0;
@@ -1021,25 +1309,8 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
     clearInterval(ai.progTimer);
     ai.progTimer = setInterval(() => { if (ai.role === "host") broadcastAll({ t: "ai-hostprog", all: ai.prog || {}, at: Date.now() }); }, 600);
   }
-  // every device (host included, even when its weights come from cache) keeps within a few
-  // percent of the slowest device, so the bars climb together and the room finishes as one
-  const slowest = () => {
-    const now = Date.now();
-    let m = Infinity;
-    for (const [nm, pct] of Object.entries(ai.prog || {})) {
-      if (nm === myName || pct >= 100) continue;
-      if (now - ((ai.progAt || {})[nm] || 0) > 30000) continue;     // silent for 30 s: don't wait on it
-      m = Math.min(m, pct);
-    }
-    return m;
-  };
-  const pacer = async () => {
-    while (ai.myPct < 100 && ai.myPct > slowest() + 4) {
-      aiStatus(`downloading weights\u2026 in step with the room (${Math.round(ai.myPct)}%)`);
-      await new Promise((r) => setTimeout(r, 250));
-    }
-  };
-  pacerHook = pacer;
+  // progress tracking across room devices
+  pacerHook = null;
 
   if (M.kind === "qwen35") {
     aiStatus("reading model index\u2026");
@@ -1069,9 +1340,9 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
     });
   } else if (M.kind === "gguf") {
     aiStatus("reading model index\u2026");
-    const G = ai.G && ai.GModel === modelKey ? ai.G : await fetchGGUFHeader(M.gguf, false);   // vocab comes from tokenizer.json
+    const G = ai.G && ai.GModel === modelKey ? ai.G : await fetchGGUFHeader(M.gguf, M.arch === "phi3");
     ai.G = G; ai.GModel = modelKey;
-    const opts = { lo: range[0], hi: range[1], hasEmbed, hasHead };
+    const opts = { lo: range[0], hi: range[1], hasEmbed, hasHead, arch: M.arch, cfg: ai.cfg };
     const total = ggufShardBytes(G, opts);
     G.streamEntry = streamWithRetry(M.gguf, streamOpts);
     const weights = await ggufWeights(G, rangeBytesOf(M.gguf), opts, (done) => onProg(done, total),
@@ -1094,26 +1365,49 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
   }
   ai.range = range;
   ai.model = modelKey;
-  aiLoading(false);
+  ai.myPct = 100;
+  ai.prog = ai.prog || {};
+  ai.prog[myName] = 100;
+  ai.progAt = ai.progAt || {};
+  ai.progAt[myName] = Date.now();
+  if (ai.role === "worker" && ai.hostId) sendTo(ai.hostId, { t: "ai-progress", pct: 100 });
+  loadCardRender();
+  aiProgress(1, 1);
+  if (ai.role === "host") {
+    const peersWaiting = (ai.chain || []).filter((id) => !ai.readyPeers?.has(id));
+    if (!peersWaiting.length) {
+      aiLoading(false);
+    } else {
+      aiLoading(true, `layers ${range[0]}\u2013${range[1] - 1} ready \u00b7 syncing cluster`);
+      $("ldg-sub").textContent = `waiting for ${peersWaiting.length} peer(s) to finish…`;
+      $("ldg-fill").style.width = "100%";
+    }
+  } else {
+    aiLoading(true, `layers ${range[0]}\u2013${range[1] - 1} ready`);
+    $("ldg-sub").textContent = "syncing with the rest of the room";
+    $("ldg-fill").style.width = "100%";
+  }
 }
 
 // ---- host ----
-function biggestPeerId() {
-  const gb = (m) => m?.contribGB ?? 0;
-  let best = peer.id, bestGB = gb(myMeta);
-  for (const [id, e] of conns) if (gb(e.meta) > bestGB || (gb(e.meta) === bestGB && id < best)) { best = id; bestGB = gb(e.meta); }
-  return best;
-}
 function aiStartAnywhere() {
   const model = $("ai-model").value;
-  const boss = biggestPeerId();
-  if (boss === peer.id) { aiStart(model); return; }
-  $("ai-start").disabled = true; $("ai-model").disabled = true;
-  aiLoading(true, `starting ${MODELS[model].label.split("\u00b7")[0].trim()}`);
-  $("ldg-sub").textContent = `${conns.get(boss)?.name || "the biggest device"} is dealing the layers`;
+  if (isHost) {
+    aiStart(model);
+    return;
+  }
+  $("ai-start").disabled = true;
+  $("ai-model").disabled = true;
+  aiLoading(true, `starting ${MODELS[model]?.label.split("\u00b7")[0].trim() || model}`);
+  $("ldg-sub").textContent = "waiting for host to deal layers…";
   $("ldg-fill").style.width = "0%";
-  aiStatus(`asked ${conns.get(boss)?.name || "the biggest device"} to start ${MODELS[model].label.split("\u00b7")[0].trim()}\u2026`);
-  broadcastAll({ t: "ai-start-req", model, boss, by: myName });
+  aiStatus(`requested host to start ${MODELS[model]?.label.split("\u00b7")[0].trim() || model}…`);
+  const hostId = ai.hostId || (PREFIX + roomCode);
+  if (conns.has(hostId)) {
+    sendTo(hostId, { t: "ai-start-req", model, by: myName });
+  } else {
+    broadcastAll({ t: "ai-start-req", model, by: myName });
+  }
 }
 async function aiStart(modelArg) {
   if (ai.engine || ai.busy) return;
@@ -1121,9 +1415,12 @@ async function aiStart(modelArg) {
   if (typeof modelArg === "string") $("ai-model").value = modelArg;
   $("ai-start").disabled = true;
   $("ai-model").disabled = true;
+  ai.readyPeers = new Set();
   try {
     ai.role = "host";
     const modelKey = $("ai-model").value;
+    ai.model = modelKey;
+    await detectLocalModel(modelKey);
     const M = MODELS[modelKey];
     ai.chain = [...conns.keys()].sort();
     ai.plan = new Map();                      // name -> load message, so a reloaded device can be re-seated
@@ -1145,9 +1442,9 @@ async function aiStart(modelArg) {
     // real per-shard byte costs (gguf: from the file's own index)
     if (M.kind === "gguf") {
       aiStatus("reading model index\u2026");
-      ai.G = await fetchGGUFHeader(M.gguf, false);
+      ai.G = await fetchGGUFHeader(M.gguf, M.arch === "phi3");
       ai.GModel = modelKey;
-      layerBytes = Object.values(ggmlLayerNames(0))
+      layerBytes = [...new Set(Object.values(ggmlLayerNames(0, M.arch)))]
         .reduce((s, nm) => s + (ai.G.tensors[nm]?.byteLength || 0), 0);
       embedBytes = (ai.G.tensors[GGML_EMBED]?.byteLength || 0) + (ai.G.tensors[GGML_OUTPUT]?.byteLength || 0);
     } else if (M.kind === "safetensors") {
@@ -1231,6 +1528,7 @@ function aiRejoin(newId, name) {
 }
 function aiMaybeReady() {
   if (ai.role !== "host" || !ai.engine) return;
+  ai.chain = (ai.chain || []).filter((id) => conns.has(id) && conns.get(id)?.conn?.open !== false);
   if (ai.deferred?.length && ai.readyPeers.size >= ai.chain.length - ai.deferred.length) {
     // host and the big devices are done: now the small ones fetch their few layers
     const d = ai.deferred; ai.deferred = [];
@@ -1238,13 +1536,21 @@ function aiMaybeReady() {
     for (const { id, msg } of d) sendTo(id, msg);
     return;
   }
-  if (ai.readyPeers.size < ai.chain.length) return;
+  const allReady = ai.chain.every((id) => ai.readyPeers.has(id));
+  if (!allReady) {
+    loadCardRender();
+    return;
+  }
   const n = ai.chain.length + 1;
-  aiStatus(`cluster online — ${n} device${n > 1 ? "s" : ""}, ${ai.cfg.num_hidden_layers} layers split ${n} ways`);
+  aiStatus(`cluster online — ${n} device${n > 1 ? "s" : ""}, ${ai.cfg?.num_hidden_layers || ""} layers split ${n} ways`);
   clearInterval(ai.progTimer);
+  aiLoading(false);
+  $("load-card").classList.remove("on");
+  $("ai-panel").classList.remove("loading");
   $("ai-panel").classList.add("online");
   $("ai-row").style.display = "flex";
-  $("ai-empty").textContent = "cluster online. ask anything.";
+  renderWelcomePrompts();
+  $("ai-empty").style.display = "";
   $("ai-prompt").focus();
   broadcastAll({ t: "ai-ready-all" });
   mascot("Cluster online! Ask anything. Everyone in the room can.");
@@ -1264,6 +1570,8 @@ async function aiPipeToken(id, needLogits = true) {
   let h = await ai.engine.embedRun(id, pos);
   if (badF32(h)) throw new Error(`NaN after HOST layers (pos ${pos}) — host GPU kernel issue`);
   if (ai.chain.length) {
+    const targetPeer = ai.chain[0];
+    const timeoutMs = pos === 0 ? 90000 : 60000;
     const returned = new Promise((res, rej) => {
       ai.waiters.set(pos, { resolve: res, reject: rej });
       setTimeout(() => {
@@ -1271,9 +1579,13 @@ async function aiPipeToken(id, needLogits = true) {
           ai.waiters.delete(pos);
           rej(new Error("pipeline timeout (peer gone?)"));
         }
-      }, 30000);
+      }, timeoutMs);
     });
-    sendHidden(ai.chain[0], { t: "ai-hidden", pos, ...packWire(h) });
+    const sent = sendHidden(targetPeer, { t: "ai-hidden", pos, ...packWire(h) });
+    if (!sent) {
+      ai.waiters.delete(pos);
+      throw new Error(`Failed to transmit activations to peer ${conns.get(targetPeer)?.name || targetPeer}`);
+    }
     h = await returned;
     if (badF32(h)) throw new Error(`NaN in hidden returned by peers (pos ${pos}) — check peer status lines`);
     ai.lastHidden = h;
@@ -1294,33 +1606,58 @@ function sendChat(msg, askerId) {
   for (const id of full) sendTo(id, msg);
   if (msg.t !== "ai-token") for (const id of hidden) sendTo(id, { t: msg.t, name: msg.name, stats: msg.stats, capped: msg.capped, hidden: true });
 }
-async function aiGenerate(textArg, who, askerId = peer.id) {
+async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
   const text = (textArg ?? $("ai-prompt").value).trim();
   const asker = who || myName;
   if (!text || ai.busy === "gen" || !ai.engine) return;
   try { ai.engine.reset?.(); } catch {}
   ai.pos = 0;
-  broadcastAll({ t: "ai-reset" });
+  for (const [, w] of ai.waiters) {
+    if (typeof w?.reject === "function") w.reject(new Error("Generation reset"));
+  }
+  ai.waiters.clear();
+  for (const [, entry] of conns) {
+    if (entry.link) resetLink(entry.link);
+  }
+  broadcastAll({ t: "ai-reset", keepReply: !!continuation.isContinuation });
+  ai.lastPrompt = continuation.originalPrompt || text;
+  ai.abortGen = false;
   ai.busy = "gen";
   $("ai-prompt").value = "";
   $("ai-prompt").style.height = "auto";
-  $("ai-send").disabled = true;
+  setSendButtonState("stop");
   const V = ai.tok.vocab;
-  const imStart = V["<|im_start|>"], imEnd = V["<|im_end|>"], eot = V["<|endoftext|>"];
-  const ids = [imStart, ...ai.tok.encode("user\n" + text), imEnd,
-    ...ai.tok.encode("\n"), imStart, ...ai.tok.encode("assistant\n")];
-  // qwen3 thinking models: pre-close the think block so answers come straight
-  if (V["<think>"] !== undefined && V["</think>"] !== undefined)
-    ids.push(V["<think>"], ...ai.tok.encode("\n\n"), V["</think>"], ...ai.tok.encode("\n\n"));
+  const isPhi = MODELS[ai.model]?.arch === "phi3";
+  const imStart = V[isPhi ? "<|user|>" : "<|im_start|>"], imEnd = V[isPhi ? "<|end|>" : "<|im_end|>"], eot = V["<|endoftext|>"];
+  const ids = isPhi
+    ? [imStart, ...ai.tok.encode("\n" + text), imEnd, ...ai.tok.encode("\n"), V["<|assistant|>"], ...ai.tok.encode("\n")]
+    : [imStart, ...ai.tok.encode("user\n" + text), imEnd, ...ai.tok.encode("\n"), imStart, ...ai.tok.encode("assistant\n")];
+  // Fast Mode (default): pre-close the think block so Qwen3 skips the 100+ token monologue and generates the answer immediately!
+  const isThinkingModel = MODELS[ai.model]?.thinking || (ai.model && ai.model.includes("qwen3"));
+  const wantThinking = ai.thinkingMode === "deep";
+  if (isThinkingModel && !wantThinking) {
+    if (V["<think>"] !== undefined && V["</think>"] !== undefined) {
+      ids.push(V["<think>"], ...ai.tok.encode("\n\n"), V["</think>"], ...ai.tok.encode("\n\n"));
+    } else {
+      ids.push(...ai.tok.encode("<think>\n\n</think>\n\n"));
+    }
+  }
   if (ids.some((t) => !Number.isInteger(t)))
     throw new Error("tokenizer produced an invalid token id (special tokens missing) \u2014 " + JSON.stringify(ids.slice(0, 6)));
 
-  chatUser(asker, text);
-  chatBotStart();
-  sendChat({ t: "ai-genstart", name: asker, text }, askerId);
+  const eosIds = new Set([imEnd, eot, imStart].filter((t) => Number.isInteger(t)));
+  if (Number.isInteger(ai.cfg?.eos_token_id)) eosIds.add(ai.cfg.eos_token_id);
+  else if (Array.isArray(ai.cfg?.eos_token_id)) for (const id of ai.cfg.eos_token_id) eosIds.add(id);
+
+  if (!continuation.isContinuation) {
+    chatUser(asker, text);
+    chatBotStart();
+    sendChat({ t: "ai-genstart", name: asker, text }, askerId);
+  }
   mascot("Thinking… every word is taking a lap through the room.");
   aiStatus(`prefill: ${ids.length} tokens…`);
 
+  let autoContinuation = null;
   try {
     // the prompt must fit the context with room for an answer; never silently truncate
     if (ids.length > MAX_SEQ - MIN_ROOM)
@@ -1338,8 +1675,8 @@ async function aiGenerate(textArg, who, askerId = peer.id) {
       await ai.engine.prefillTokens(ids.slice(0, -1));
       ai.pos = ai.engine.pos;
       logits = await aiPipeToken(ids[ids.length - 1]);
-    } else if (ai.engine.embedRunBatch && ids.length > 5) {
-      // split: up to 16 prompt tokens per network round (4 GPU passes of 4)
+    } else if (ai.chain.length && ai.engine.embedRunBatch && ai.engine.mtp && ids.length > 5) {
+      // split: speculative/MTP model with tested batched prefill (Qwen 3.8 27B)
       let i = 0;
       const hdim = ai.engine.dims.dim;
       const NC = ai.engine.NC || 4;   // columns per GPU pass; up to 16 tokens per network round
@@ -1381,18 +1718,24 @@ async function aiGenerate(textArg, who, askerId = peer.id) {
       }
       for (; i < ids.length; i++) logits = await aiPipeToken(ids[i], i === ids.length - 1);
     } else {
-      for (let i = 0; i < ids.length; i++) logits = await aiPipeToken(ids[i], i === ids.length - 1);
+      for (let i = 0; i < ids.length; i++) {
+        if (i % 4 === 0 || i === ids.length - 1) aiStatus(`prefill: ${i + 1}/${ids.length} tokens…`);
+        logits = await aiPipeToken(ids[i], i === ids.length - 1);
+      }
     }
     const t0 = performance.now();
-    let count = 0, reply = "";
+    let count = 0, reply = continuation.prefixReply || "";
+    const streamDecoder = ai.tok.createStreamDecoder();
     const emit = (tok) => {
-      const piece = ai.tok.decode([tok]);
+      const piece = streamDecoder.decode([tok]);
       reply += piece;
       count++;
       chatBotUpdate(reply);
       sendChat({ t: "ai-token", text: piece }, askerId);
       aiStatus(`generating… ${count} tok · ${(count / ((performance.now() - t0) / 1000)).toFixed(1)} tok/s`);
     };
+    const recentTokens = [];
+    const sample = (lgt) => aiSample(lgt, 0.8, 40, recentTokens, 1.15);
     if (ai.engine.mtp && ai.engine.specStep) {
       // speculative decoding: the model's own draft head proposes up to 3 tokens,
       // one batched trunk pass verifies them (byte-identical to plain decoding)
@@ -1446,9 +1789,10 @@ async function aiGenerate(textArg, who, askerId = peer.id) {
       // the first answer token is sampled here; specStep treats it as already chosen for this
       // position and returns only the tokens after it, so it has to be emitted (or end the
       // answer) before the loop, or the reply starts one word late
-      let next = aiSample(logits), done = false;
-      if (next === imEnd || next === eot || next === imStart) done = true; else emit(next);
+      let next = sample(logits), done = false;
+      if (eosIds.has(next)) done = true; else { emit(next); recentTokens.push(next); }
       while (!done && count < maxNew) {
+        if (ai.abortGen) { done = true; capped = false; break; }
         // a speculative step touches positions pos .. pos+K (K drafts verified in one pass) and
         // drafts one more; shrink K near the end of the context and stop before it overflows
         let K = pickK();
@@ -1456,14 +1800,15 @@ async function aiGenerate(textArg, who, askerId = peer.id) {
         if (roomLeft < 1) { capped = true; break; }
         K = Math.min(K, roomLeft, maxNew - count + 1);
         const tStep = performance.now();
-        const toks = await ai.engine.specStep(next, aiSample, K, spec);
+        const toks = await ai.engine.specStep(next, sample, K, spec);
         const tps = toks.length / ((performance.now() - tStep) / 1000);
         kc.ema[K] = kc.n[K] ? 0.6 * kc.ema[K] + 0.4 * tps : tps;
         kc.n[K] = (kc.n[K] || 0) + 1; kc.used[K] = (kc.used[K] || 0) + toks.length;
         for (const tk of toks) {
-          if (tk === imEnd || tk === eot || tk === imStart) { done = true; break; }
+          if (eosIds.has(tk)) { done = true; break; }
           if (count >= maxNew) { done = true; capped = true; break; }
           emit(tk);
+          recentTokens.push(tk);
         }
         next = toks[toks.length - 1];
       }
@@ -1475,33 +1820,103 @@ async function aiGenerate(textArg, who, askerId = peer.id) {
     } else {
       let hitEos = false;
       for (let i = 0; i < maxNew; i++) {
-        const next = aiSample(logits);
-        if (next === imEnd || next === eot || next === imStart) { hitEos = true; await aiPipeToken(next, false); break; }
+        if (ai.abortGen) { capped = false; break; }
+        const next = sample(logits);
+        if (eosIds.has(next)) { hitEos = true; await aiPipeToken(next, false); break; }
         emit(next);
+        recentTokens.push(next);
         if (ai.pos >= MAX_SEQ - 1 || i === maxNew - 1) { capped = true; break; }   // no position left for another token
         logits = await aiPipeToken(next);
       }
       if (!hitEos && !capped && count >= maxNew) capped = true;
     }
+    const finalPiece = streamDecoder.finish();
+    if (finalPiece) {
+      reply += finalPiece;
+      chatBotUpdate(reply);
+      sendChat({ t: "ai-token", text: finalPiece }, askerId);
+    }
     const secs = (performance.now() - t0) / 1000;
-    const stats = `${count} tok · ${(count / secs).toFixed(1)} tok/s · ${ai.chain.length + 1} devices${capped ? ` · stopped: context limit reached (${MAX_SEQ} tokens)` : ""}`;
-    chatBotEnd(reply, stats, capped);
-    sendChat({ t: "ai-gendone", stats, capped }, askerId);
-    mascot(capped ? "Context limit reached. Ask to continue or start a new question." : "Done. Anyone in the room can ask the next one.");
-    aiStatus(`ready — prefill ${((t0 - tPre) / 1000).toFixed(1)}s, ${stats}`);
+    const wasAborted = ai.abortGen;
+    if (capped && !wasAborted && (continuation.autoDepth || 0) < 2) {
+      const excerpt = reply.slice(-1000);
+      autoContinuation = {
+        prompt: `Continue answering this original request: ${continuation.originalPrompt || text}\nContinue immediately after the excerpt below. Do not repeat it. If this is code, keep it as one complete file and finish any unfinished blocks. Output only the continuation.\n\n${excerpt}`,
+        prefixReply: reply,
+        originalPrompt: continuation.originalPrompt || text,
+        autoDepth: (continuation.autoDepth || 0) + 1,
+        priorCount: (continuation.priorCount || 0) + count,
+        priorSecs: (continuation.priorSecs || 0) + secs,
+      };
+      aiStatus("answer reached the room's context limit; continuing automatically…");
+      mascot("Continuing the answer automatically…");
+    } else {
+      const totalCount = (continuation.priorCount || 0) + count;
+      const totalSecs = (continuation.priorSecs || 0) + secs;
+      const stats = `${totalCount} tok · ${(totalCount / (totalSecs || 0.001)).toFixed(1)} tok/s · ${ai.chain.length + 1} devices${wasAborted ? " · stopped by user" : capped ? ` · stopped: context limit reached (${MAX_SEQ} tokens)` : ""}`;
+      chatBotEnd(reply, stats, capped && !wasAborted);
+      sendChat({ t: "ai-gendone", stats, capped: capped && !wasAborted }, askerId);
+      mascot(wasAborted ? "Generation stopped." : capped ? "Context limit reached. Ask to continue or start a new question." : "Done. Anyone in the room can ask the next one.");
+      aiStatus(`ready — prefill ${((t0 - tPre) / 1000).toFixed(1)}s, ${stats}`);
+    }
   } catch (err) {
     aiStatus("generation failed: " + err.message);
-    chatBotEnd("\u26a0 " + err.message, "");
+    chatBotEnd((continuation.prefixReply || "") + "\n\n⚠ " + err.message, "");
     sendChat({ t: "ai-gendone", stats: "failed: " + err.message }, askerId);   // unlock everyone's send box
+  } finally {
+    ai.busy = false;
+    ai.abortGen = false;
+    setSendButtonState("send");
+    if (autoContinuation) {
+      aiGenerate(autoContinuation.prompt, asker, askerId, { ...autoContinuation, isContinuation: true });
+    }
   }
-  ai.busy = false;
-  $("ai-send").disabled = false;
 }
 
 // ---- worker + shared message handling ----
 async function aiOnData(from, d) {
   const e = conns.get(from);
   switch (d.t) {
+    case "ai-start-req":
+      if (MODELS[d.model]) $("ai-model").value = d.model;
+      $("ai-start").disabled = true;
+      $("ai-model").disabled = true;
+      if (isHost) {
+        toast(`${d.by || "peer"} started ${MODELS[d.model]?.label.split("\u00b7")[0].trim() || d.model}`);
+        aiStart(d.model);
+      } else {
+        aiLoading(true, `starting ${MODELS[d.model]?.label.split("\u00b7")[0].trim() || d.model}`);
+        $("ldg-sub").textContent = `${d.by || "peer"} pressed start`;
+        $("ldg-fill").style.width = "0%";
+        aiStatus(`${d.by || "peer"} started the model\u2026`);
+      }
+      break;
+    case "ai-layers":
+      ai.layersByName = d.by;
+      loadCardRender();
+      break;
+    case "ai-next":
+      ai.next = d.next;
+      ensureLink(d.next);
+      break;
+    case "ai-reset":
+      try { ai.engine?.reset?.(); } catch {}
+      ai.pos = 0;
+      if (!d.keepReply) ai.remoteReply = "";
+      if (ai.waiters) {
+        for (const [, w] of ai.waiters) {
+          if (typeof w?.reject === "function") w.reject(new Error("Generation reset"));
+        }
+        ai.waiters.clear();
+      }
+      for (const [, entry] of conns) {
+        if (entry.link) resetLink(entry.link);
+      }
+      break;
+    case "ai-think-mode":
+      ai.thinkingMode = d.mode;
+      updateThinkModeUI(d.mode);
+      break;
     case "ai-wait":
       ai.role = "worker"; ai.hostId = from;
       aiLoading(true, "Syncing with the room");
@@ -1516,14 +1931,25 @@ async function aiOnData(from, d) {
       ai.hostId = d.host;
       ensureLink(d.next);   // open the link to my chain neighbour while the weights download
       try {
+        await detectLocalModel(d.model || "smollm-135m");
         await aiLoadShard(d.model || "smollm-135m", d.range, false, false);
         if (!(await ensureLink(d.next))) throw new Error("could not connect to the next device in the chain");
         aiStatus(`layers ${d.range[0]}\u2013${d.range[1] - 1} ready \u00b7 syncing with the room\u2026`);
         aiLoading(true, `layers ${d.range[0]}\u2013${d.range[1] - 1} ready`);
         $("ldg-sub").textContent = "syncing with the rest of the room";
         $("ldg-fill").style.width = "100%";
-        sendTo(ai.hostId, { t: "ai-ready" });
+        sendTo(ai.hostId, { t: "ai-ready", from: peer.id });
+        if (ai.readyRetryTimer) clearInterval(ai.readyRetryTimer);
+        ai.readyRetryTimer = setInterval(() => {
+          if ($("ai-panel").classList.contains("online")) {
+            clearInterval(ai.readyRetryTimer);
+            ai.readyRetryTimer = null;
+            return;
+          }
+          sendTo(ai.hostId, { t: "ai-ready", from: peer.id });
+        }, 1500);
       } catch (err) {
+        if (ai.readyRetryTimer) { clearInterval(ai.readyRetryTimer); ai.readyRetryTimer = null; }
         aiLoading(false);
         aiStatus("failed: " + err.message);
         sendTo(ai.hostId, { t: "ai-error", message: err.message });
@@ -1545,7 +1971,9 @@ async function aiOnData(from, d) {
       break;
     case "ai-ready":
       ai.readyPeers.add(from);
+      if (d.from) ai.readyPeers.add(d.from);
       if (e?.card) e.card.querySelector(".bw").textContent = "ready";
+      loadCardRender();
       aiMaybeReady();
       break;
     case "ai-error":
@@ -1581,8 +2009,13 @@ async function aiOnData(from, d) {
           return;
         }
         const bmsg = { basePos: d.basePos, n: nTok, ...packWire(hb) };
-        if (ai.next === "host") sendHidden(ai.hostId, { t: "ai-hiddenret-b", ...bmsg });
-        else sendHidden(ai.next, { t: "ai-hidden-b", ...bmsg });
+        let sent = false;
+        if (ai.next === "host") sent = sendHidden(ai.hostId, { t: "ai-hiddenret-b", ...bmsg });
+        else sent = sendHidden(ai.next, { t: "ai-hidden-b", ...bmsg });
+        if (!sent) {
+          console.warn(`Worker failed to send hidden-b at basePos ${d.basePos} to ${ai.next}`);
+          if (ai.hostId) sendTo(ai.hostId, { t: "ai-error", message: `failed to transmit batch activations along chain to ${ai.next}` });
+        }
       } catch (err) {
         console.error("Worker ai-hidden-b execution error:", err);
         aiStatus(`\u26a0 worker batch prefill error: ${err.message}`);
@@ -1621,9 +2054,14 @@ async function aiOnData(from, d) {
           return;
         }
         const msg = { pos: d.pos, ...packWire(h) };
-        if (ai.next === "host") sendHidden(ai.hostId, { t: "ai-hiddenret", ...msg });
-        else sendHidden(ai.next, { t: "ai-hidden", ...msg });
-        if (d.pos % 8 === 0) aiStatus(`serving layers ${ai.range[0]}\u2013${ai.range[1] - 1} \u2014 pos ${d.pos}`);
+        let sent = false;
+        if (ai.next === "host") sent = sendHidden(ai.hostId, { t: "ai-hiddenret", ...msg });
+        else sent = sendHidden(ai.next, { t: "ai-hidden", ...msg });
+        if (!sent) {
+          console.warn(`Worker failed to send hidden at pos ${d.pos} to ${ai.next}`);
+          if (ai.hostId) sendTo(ai.hostId, { t: "ai-error", message: `failed to transmit activations along chain to ${ai.next}` });
+        }
+        if (d.pos % 8 === 0) aiStatus(`serving layers ${ai.range[0]}\u2013${ai.range[1] - 1} — pos ${d.pos}`);
       } catch (err) {
         console.error("Worker ai-hidden error:", err);
         if (ai.hostId) sendTo(ai.hostId, { t: "ai-error", message: `worker layer run failed: ${err.message}` });
@@ -1645,21 +2083,34 @@ async function aiOnData(from, d) {
       ai.visibility = d.mode;
       toast(d.mode === "all" ? "the host shows the chat to everyone" : d.mode === "host" ? "the host keeps the chat private" : "the host shows each answer to whoever asked");
       break;
+    case "ai-abort":
+      if (isHost && ai.busy === "gen") {
+        ai.abortGen = true;
+      }
+      break;
     case "ai-genstart":
       ai.remoteReply = "";
       chatUser(d.name, d.hidden ? "asked something (the host keeps the chat private)" : d.text);
       chatBotStart();
-      $("ai-send").disabled = true;
+      setSendButtonState("stop");
       mascot(`${d.name} asked something. Thinking…`);
       break;
     case "ai-token": ai.remoteReply = (ai.remoteReply || "") + d.text; chatBotUpdate(ai.remoteReply); break;
-    case "ai-gendone": chatBotEnd(d.hidden ? "answer hidden by the host" : (ai.remoteReply || ""), d.stats, d.capped); $("ai-send").disabled = false; mascot(d.capped ? "Reached context limit. Ask to continue or start fresh." : "Your turn. Ask anything."); break;
+    case "ai-gendone":
+      chatBotEnd(d.hidden ? "answer hidden by the host" : (ai.remoteReply || ""), d.stats, d.capped);
+      setSendButtonState("send");
+      mascot(d.capped ? "Reached context limit. Ask to continue or start fresh." : "Your turn. Ask anything.");
+      break;
     case "ai-ready-all":
+      if (ai.readyRetryTimer) { clearInterval(ai.readyRetryTimer); ai.readyRetryTimer = null; }
       aiLoading(false);
+      $("load-card").classList.remove("on");
+      $("ai-panel").classList.remove("loading");
       $("ai-panel").classList.add("online");
       if (ai.role !== "host") { ai.role = ai.role || "guest"; ai.hostId = from; }
       $("ai-row").style.display = "flex";
-      $("ai-empty").textContent = "cluster online. ask anything.";
+      renderWelcomePrompts();
+      $("ai-empty").style.display = "";
       aiStatus(`cluster online · serving layers ${ai.range ? ai.range[0] + "–" + (ai.range[1] - 1) : ""}`);
       mascot("Cluster online! Type a question, the whole room answers.");
       break;
@@ -1683,9 +2134,16 @@ $("cache-clear").addEventListener("click", async (ev) => {
   try { await caches.delete("swarmllm-weights-v1"); weightCache = null; toast("cached weights cleared"); } catch { toast("could not clear the cache"); }
 });
 function aiSubmit() {
+  if (ai.busy === "gen") {
+    ai.abortGen = true;
+    aiStatus("stopping generation…");
+    broadcastAll({ t: "ai-abort" });
+    return;
+  }
   const promptEl = $("ai-prompt");
   const text = promptEl.value.trim();
   if (!text) return;
+  ai.lastPrompt = text;
   if (ai.role === "host") { aiGenerate(); return; }
   const hostId = ai.hostId;
   if (!conns.has(hostId)) { toast("not connected to the host"); return; }
@@ -1705,6 +2163,43 @@ $("ai-prompt").addEventListener("keydown", (e) => {
     aiSubmit();
   }
 });
+function updateThinkModeUI(mode) {
+  const fastBtn = $("mode-fast"), deepBtn = $("mode-deep");
+  if (!fastBtn || !deepBtn) return;
+  if (mode === "deep") {
+    fastBtn.classList.remove("active");
+    deepBtn.classList.add("active");
+  } else {
+    deepBtn.classList.remove("active");
+    fastBtn.classList.add("active");
+  }
+}
+
+function setupThinkingModeToggle() {
+  ai.thinkingMode = localStorage.getItem("swarm_think_mode") || "fast";
+  updateThinkModeUI(ai.thinkingMode);
+  const fastBtn = $("mode-fast"), deepBtn = $("mode-deep");
+  if (fastBtn) {
+    fastBtn.addEventListener("click", () => {
+      ai.thinkingMode = "fast";
+      localStorage.setItem("swarm_think_mode", "fast");
+      updateThinkModeUI("fast");
+      toast("⚡ Fast Mode: instant answers without reasoning delay");
+      broadcastAll({ t: "ai-think-mode", mode: "fast" });
+    });
+  }
+  if (deepBtn) {
+    deepBtn.addEventListener("click", () => {
+      ai.thinkingMode = "deep";
+      localStorage.setItem("swarm_think_mode", "deep");
+      updateThinkModeUI("deep");
+      toast("🧠 Deep Thinking: generating full chain of thought");
+      broadcastAll({ t: "ai-think-mode", mode: "deep" });
+    });
+  }
+}
+setupThinkingModeToggle();
+
 mascot("Hi! I'm Swarmy. Create a room, or type a friend's code to join one.");
 
 window.__roomStart = start;

@@ -78,7 +78,7 @@ export class DenseEngine {
     const cfgData = new ArrayBuffer(48);
     const cu = new Uint32Array(cfgData), cf = new Float32Array(cfgData);
     cu.set([dim, kvDim, nH, nKV, headDim, inter, vocab, maxSeq], 0);
-    cf[8] = cfg.rms_norm_eps; cf[9] = cfg.rope_theta; cu[10] = qDim;
+    cf[8] = cfg.rms_norm_eps; cf[9] = cfg.rope_theta; cu[10] = qDim; cu[11] = cfg.rope_dim || headDim;
     this.cfgBuf = this._buf(cfgData, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
     this.frameBuf = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this._shapes = {};
@@ -371,6 +371,7 @@ export class DenseEngine {
     this.stageXB = dev.createBuffer({ size: 4 * dim * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
     const slice = (b, c) => ({ buffer: b.buf, offset: c * b.stride, size: b.n * 4 });
     this._bslice = slice;
+    this.scoresB = [0, 1, 2, 3].map(() => dev.createBuffer({ size: nH * this.maxSeq * 4, usage: S }));
     // per-column frame uniforms + per-column group0 for the per-token kernels
     this.frameBufsB = [0, 1, 2, 3].map(() => dev.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
     const colPipes = ["rmsnorm", "head_norm", "rope", "attn_scores", "attn_softmax", "attn_out", "silu_mul", "add_res"];
@@ -405,9 +406,9 @@ export class DenseEngine {
           kNorm: L.kNorm ? this._bg2res(this.pipes.head_norm, [slice(B.k, c), { buffer: L.kNorm.buf }, { buffer: this.nKVBuf }]) : null,
           ropeQ: this._bg2res(this.pipes.rope, [slice(B.q, c), { buffer: this.nHBuf }]),
           ropeK: this._bg2res(this.pipes.rope, [slice(B.k, c), { buffer: this.nKVBuf }]),
-          scores: this._bg2res(this.pipes.attn_scores, [slice(B.q, c), { buffer: L.kCache }, { buffer: this.scores }]),
-          softmax: this._bg2res(this.pipes.attn_softmax, [{ buffer: this.scores }]),
-          attnOut: this._bg2res(this.pipes.attn_out, [{ buffer: this.scores }, { buffer: L.vCache }, slice(B.attnOut, c)]),
+          scores: this._bg2res(this.pipes.attn_scores, [slice(B.q, c), { buffer: L.kCache }, { buffer: this.scoresB[c] }]),
+          softmax: this._bg2res(this.pipes.attn_softmax, [{ buffer: this.scoresB[c] }]),
+          attnOut: this._bg2res(this.pipes.attn_out, [{ buffer: this.scoresB[c] }, { buffer: L.vCache }, slice(B.attnOut, c)]),
           addTmp: this._bg2res(this.pipes.add_res, [slice(B.x, c), slice(B.tmpDim, c)]),
           silu: this._bg2res(this.pipes.silu_mul, [slice(B.g, c), slice(B.u, c)]),
         })),
@@ -483,9 +484,15 @@ export class DenseEngine {
   }
   async _runBatchAndRead(basePos) {
     const { dim } = this.dims;
-    const enc = this.device.createCommandEncoder();
+    let enc = this.device.createCommandEncoder();
     if (this._pendingEmbeds) { for (const [id, c] of this._pendingEmbeds) this._stageEmbedBatchCol(enc, id, c); this._pendingEmbeds = null; }
-    for (let l = 0; l < this.layers.length; l++) this._encodeLayerBatch(enc, l, basePos);
+    for (let l = 0; l < this.layers.length; l++) {
+      this._encodeLayerBatch(enc, l, basePos);
+      if (l % 4 === 3 && l + 1 < this.layers.length) {
+        this.device.queue.submit([enc.finish()]);
+        enc = this.device.createCommandEncoder();
+      }
+    }
     for (let c = 0; c < 4; c++) enc.copyBufferToBuffer(this.B.x.buf, c * this.B.x.stride, this.stageXB, c * dim * 4, dim * 4);
     this.device.queue.submit([enc.finish()]);
     await this.stageXB.mapAsync(GPUMapMode.READ);
@@ -533,8 +540,14 @@ export class DenseEngine {
           this.device.queue.writeBuffer(this.B.x.buf, c * this.B.x.stride, this._embedRowF32(ids[i + c]));
         }
       }
-      const enc = this.device.createCommandEncoder();
-      for (let l = 0; l < this.layers.length; l++) this._encodeLayerBatch(enc, l, basePos);
+      let enc = this.device.createCommandEncoder();
+      for (let l = 0; l < this.layers.length; l++) {
+        this._encodeLayerBatch(enc, l, basePos);
+        if (l % 4 === 3 && l + 1 < this.layers.length) {
+          this.device.queue.submit([enc.finish()]);
+          enc = this.device.createCommandEncoder();
+        }
+      }
       // hidden of the last column becomes the running x for any tail tokens
       enc.copyBufferToBuffer(this.B.x.buf, 3 * this.B.x.stride, this.x, 0, this.dims.dim * 4);
       this.device.queue.submit([enc.finish()]);
@@ -569,8 +582,14 @@ export class DenseEngine {
     this.pos = pos;
     this._setFrame(pos, pos + 1);
     this._stageEmbed(tokenId);
-    const enc = this.device.createCommandEncoder();
-    for (let i = 0; i < this.layers.length; i++) this._encodeLayer(enc, i);
+    let enc = this.device.createCommandEncoder();
+    for (let i = 0; i < this.layers.length; i++) {
+      this._encodeLayer(enc, i);
+      if (i % 4 === 3 && i + 1 < this.layers.length) {
+        this.device.queue.submit([enc.finish()]);
+        enc = this.device.createCommandEncoder();
+      }
+    }
     this.device.queue.submit([enc.finish()]);
     return await this._readback(this.x, this.stageX, dim);
   }
@@ -596,8 +615,14 @@ export class DenseEngine {
     this.pos = pos;
     this._setFrame(pos, pos + 1);
     this.device.queue.writeBuffer(this.x, 0, xIn);
-    const enc = this.device.createCommandEncoder();
-    for (let i = 0; i < this.layers.length; i++) this._encodeLayer(enc, i);
+    let enc = this.device.createCommandEncoder();
+    for (let i = 0; i < this.layers.length; i++) {
+      this._encodeLayer(enc, i);
+      if (i % 4 === 3 && i + 1 < this.layers.length) {
+        this.device.queue.submit([enc.finish()]);
+        enc = this.device.createCommandEncoder();
+      }
+    }
     this.device.queue.submit([enc.finish()]);
     return await this._readback(this.x, this.stageX, dim);
   }

@@ -160,8 +160,15 @@ export function q8Repack(info, bytes) {
 }
 
 // map ggml tensor names -> the engine's internal names for llama/qwen-family models
-export function ggmlLayerNames(i) {
+export function ggmlLayerNames(i, arch = "llama") {
   const p = `blk.${i}.`;
+  if (arch === "phi3") return {
+    inNorm: p + "attn_norm.weight",
+    q: p + "attn_qkv.weight", k: p + "attn_qkv.weight", v: p + "attn_qkv.weight",
+    o: p + "attn_output.weight",
+    postNorm: p + "ffn_norm.weight",
+    gate: p + "ffn_up.weight", up: p + "ffn_up.weight", down: p + "ffn_down.weight",
+  };
   return {
     inNorm: p + "attn_norm.weight",
     q: p + "attn_q.weight", k: p + "attn_k.weight", v: p + "attn_v.weight",
@@ -178,19 +185,23 @@ export const GGML_OUTPUT = "output.weight"; // absent when embeddings are tied
 // Build the engine's weight structure from a parsed GGUF header.
 // bytesOf: async (info) => Uint8Array of that tensor's data (local slice or
 // HTTP range fetch — same contract as the safetensors shard path).
-export async function ggufEntry(G, bytesOf, name, optional, onBytes = () => {}) {
+export async function ggufEntry(G, bytesOf, name, optional, onBytes = () => {}, forceCPU = false) {
   const info = G.tensors[name];
   if (!info) {
     if (optional) return null;
     throw new Error("missing tensor " + name);
   }
   // the embedding stays on the CPU too (per-token row lookups), so it takes the normal path
-  if (G.streamEntry && name !== GGML_EMBED && info.shape.length === 2 && (info.ggmlType === GGML_Q8_0 || info.ggmlType === GGML_Q4_0)) {
-    const e = await G.streamEntry(info);
-    if (e) { onBytes(info.byteLength); return e; }
+  if (!forceCPU && G.streamEntry && name !== GGML_EMBED && info.shape.length === 2 && (info.ggmlType === GGML_Q8_0 || info.ggmlType === GGML_Q4_0)) {
+    let reported = 0;
+    const report = (b) => { reported += b; onBytes(b); };
+    const e = await G.streamEntry(info, report);
+    if (e) { if (reported < info.byteLength) onBytes(info.byteLength - reported); return e; }
   }
-  const bytes = await bytesOf(info);
-  onBytes(info.byteLength);
+  let reported = 0;
+  const report = (b) => { reported += b; onBytes(b); };
+  const bytes = await bytesOf(info, report);
+  if (reported < info.byteLength) onBytes(info.byteLength - reported);
   if (info.shape.length === 2) {
     if (info.ggmlType === GGML_Q8_0) {
       const { qs, scales } = q8Repack(info, bytes);
@@ -231,16 +242,41 @@ export function requantQ8Streaming(info, bytes) {
   return { qs, scales };
 }
 
-export async function ggufWeights(G, bytesOf, { lo, hi, hasEmbed, hasHead }, onProgress = () => {}, onEntry = null) {
+function splitRows(e, rowStart, rows, cols) {
+  if (e.kind === "f32") return { kind: "f32", data: e.data.slice(rowStart * cols, (rowStart + rows) * cols), shape: [rows, cols] };
+  const from = rowStart * cols, to = from + rows * cols;
+  const qs = e.kind === "q4" ? e.qs.subarray(from / 2, to / 2) : e.qs.subarray(from, to);
+  const sc16 = new Uint16Array(e.scales.buffer, e.scales.byteOffset, e.scales.byteLength / 2);
+  const scales = new Uint32Array(Math.ceil((to - from) / 32 / 2));
+  new Uint16Array(scales.buffer).set(sc16.subarray(from / 32, to / 32));
+  return { kind: e.kind, qs: qs.slice(), scales, shape: [rows, cols] };
+}
+
+export async function ggufWeights(G, bytesOf, { lo, hi, hasEmbed, hasHead, arch = "llama", cfg = null }, onProgress = () => {}, onEntry = null) {
   let fetched = 0;
   const entry = async (name, optional) => {
-    const e = await ggufEntry(G, bytesOf, name, optional, (b) => { fetched += b; onProgress(fetched); });
+    const e = await ggufEntry(G, bytesOf, name, optional, (b) => { fetched += b; onProgress(fetched); }, arch === "phi3" && (name.includes("attn_qkv") || name.endsWith("ffn_up.weight")));
     if (e && onEntry) onEntry(e, name);
     return e;
   };
   const layers = [];
   for (let i = lo; i < hi; i++) {
-    const N = ggmlLayerNames(i);
+    const N = ggmlLayerNames(i, arch);
+    if (arch === "phi3") {
+      const fusedQ = await ggufEntry(G, bytesOf, N.q, false, (b) => { fetched += b; onProgress(fetched); }, true);
+      const headDim = cfg.head_dim || cfg.hidden_size / cfg.num_attention_heads;
+      const qRows = cfg.num_attention_heads * headDim, kvRows = cfg.num_key_value_heads * headDim;
+      const cols = fusedQ.shape[1];
+      const q = splitRows(fusedQ, 0, qRows, cols), k = splitRows(fusedQ, qRows, kvRows, cols), v = splitRows(fusedQ, qRows + kvRows, kvRows, cols);
+      for (const [e, n] of [[q, `blk.${i}.attn_q.weight`], [k, `blk.${i}.attn_k.weight`], [v, `blk.${i}.attn_v.weight`]]) if (onEntry) onEntry(e, n);
+      const fusedGU = await ggufEntry(G, bytesOf, N.gate, false, (b) => { fetched += b; onProgress(fetched); }, true);
+      const inter = cfg.intermediate_size;
+      const gate = splitRows(fusedGU, 0, inter, cfg.hidden_size), up = splitRows(fusedGU, inter, inter, cfg.hidden_size);
+      if (onEntry) { onEntry(gate, `blk.${i}.ffn_gate.weight`); onEntry(up, `blk.${i}.ffn_up.weight`); }
+      layers.push({ inNorm: await entry(N.inNorm), postNorm: await entry(N.postNorm), q, k, v,
+        o: await entry(N.o), qNorm: null, kNorm: null, gate, up, down: await entry(N.down) });
+      continue;
+    }
     layers.push({
       inNorm: await entry(N.inNorm), postNorm: await entry(N.postNorm),
       q: await entry(N.q), k: await entry(N.k), v: await entry(N.v), o: await entry(N.o),
@@ -258,10 +294,10 @@ export async function ggufWeights(G, bytesOf, { lo, hi, hasEmbed, hasHead }, onP
 }
 
 // Total bytes a shard will download (for progress bars / pledge checks)
-export function ggufShardBytes(G, { lo, hi, hasEmbed, hasHead }) {
+export function ggufShardBytes(G, { lo, hi, hasEmbed, hasHead, arch = "llama" }) {
   let total = 0;
   const add = (n) => { if (G.tensors[n]) total += G.tensors[n].byteLength; };
-  for (let i = lo; i < hi; i++) Object.values(ggmlLayerNames(i)).forEach(add);
+  for (let i = lo; i < hi; i++) new Set(Object.values(ggmlLayerNames(i, arch))).forEach(add);
   if (hasEmbed || hasHead) add(GGML_EMBED);
   if (hasHead) { add(GGML_FINAL_NORM); add(GGML_OUTPUT); }
   return total;
@@ -556,7 +592,7 @@ export function gpuUploadEntry(device, e, keepCpu = false) {
 // repacked into a small reused staging area and written out, the rest waits
 // for the next chunk. Peak CPU memory ~ one network chunk + staging (a few
 // MB) instead of 3x the tensor. This is what keeps an iPhone tab alive.
-export async function streamEntryToGPU(device, info, openRange, { pace = 0, staging = 4 * 2 ** 20 } = {}) {
+export async function streamEntryToGPU(device, info, openRange, { pace = 0, staging = 4 * 2 ** 20 } = {}, onProgress = () => {}) {
   const q4 = info.ggmlType === GGML_Q4_0;
   const BLK = q4 ? 18 : Q8_0_BLOCK_BYTES;      // bytes per block in the file
   const QSB = q4 ? 16 : QK8_0;                 // quant bytes per block on the GPU
@@ -586,6 +622,7 @@ export async function streamEntryToGPU(device, info, openRange, { pace = 0, stag
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
+    onProgress(value.byteLength);
     let buf = value;
     if (carry.length) { const m = new Uint8Array(carry.length + value.length); m.set(carry); m.set(value, carry.length); buf = m; carry = new Uint8Array(0); }
     const whole = Math.floor(buf.length / BLK);

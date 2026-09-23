@@ -20,6 +20,15 @@ export function makeTokenizer(tj) {
   bs.forEach((b, i) => { byteToChar[b] = String.fromCharCode(cs[i]); charToByte[String.fromCharCode(cs[i])] = b; });
   const pat = /'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+/gu;
   const enc = new TextEncoder(), dec = new TextDecoder();
+  const tokenBytes = (ids) => {
+    const bytes = [];
+    for (const id of ids) {
+      const tok = idToTok[id];
+      if (tok === undefined) continue;
+      for (const ch of tok) { const b = charToByte[ch]; if (b !== undefined) bytes.push(b); }
+    }
+    return new Uint8Array(bytes);
+  };
   function bpe(word) {
     let parts = [...word];
     while (parts.length > 1) {
@@ -45,13 +54,14 @@ export function makeTokenizer(tj) {
       return ids;
     },
     decode(ids) {
-      const bytes = [];
-      for (const id of ids) {
-        const tok = idToTok[id];
-        if (tok === undefined) continue;
-        for (const ch of tok) { const b = charToByte[ch]; if (b !== undefined) bytes.push(b); }
-      }
-      return dec.decode(new Uint8Array(bytes));
+      return dec.decode(tokenBytes(ids));
+    },
+    createStreamDecoder() {
+      const stream = new TextDecoder();
+      return {
+        decode(ids) { return stream.decode(tokenBytes(ids), { stream: true }); },
+        finish() { return stream.decode(); },
+      };
     },
   };
 }

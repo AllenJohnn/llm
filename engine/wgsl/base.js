@@ -4,7 +4,7 @@ export const WGSL = /* wgsl */ `
 struct Config {
   dim: u32, kvDim: u32, nH: u32, nKV: u32,
   headDim: u32, inter: u32, vocab: u32, maxSeq: u32,
-  eps: f32, theta: f32, qDim: u32,
+  eps: f32, theta: f32, qDim: u32, ropeDim: u32,
 };
 struct Frame { pos: u32, seqLen: u32, nCols: u32, snap: u32 };
 struct Shape { dOut: u32, dIn: u32 };
@@ -144,14 +144,14 @@ fn rmsnorm(@builtin(local_invocation_id) lid: vec3<u32>) {
 @group(1) @binding(1) var<uniform> rp_nheads: u32;
 @compute @workgroup_size(64)
 fn rope(@builtin(global_invocation_id) gid: vec3<u32>) {
-  let half = cfg.headDim / 2u;
+  let half = cfg.ropeDim / 2u;
   let total = rp_nheads * half;
   let idx = gid.x;
   if (idx >= total) { return; }
   let h = idx / half;
   let i = idx % half;
   let off = h * cfg.headDim;
-  let freq = pow(cfg.theta, -f32(2u * i) / f32(cfg.headDim));
+  let freq = pow(cfg.theta, -f32(2u * i) / f32(cfg.ropeDim));
   let ang = f32(frame.pos) * freq;
   let c = cos(ang); let s = sin(ang);
   let a = rp_v[off + i]; let b = rp_v[off + i + half];

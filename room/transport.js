@@ -18,6 +18,12 @@ const KINDS = ["ai-hidden", "ai-hidden-b", "ai-hiddenret", "ai-hiddenret-b"];
 // Per-link state: { chans: [RTCDataChannel], rr: number, rx: Map<msgId, {parts, got, n, meta}> }
 export function makeLink() { return { chans: [], rr: 0, rx: new Map(), nextId: 1, sent: 0, recv: 0 }; }
 
+// Reset link state on fresh generation context to flush stale slices
+export function resetLink(link) {
+  if (!link) return;
+  if (link.rx) link.rx.clear();
+}
+
 // Open the wire channel on a PeerJS DataConnection's RTCPeerConnection. Both sides call this with
 // the same id, so no ondatachannel event fires and PeerJS never sees the channel.
 export function attachWire(link, conn, onFrame, { ordered = true } = {}) {
@@ -40,6 +46,10 @@ export function sendFrame(link, msg) {
     if (kind < 0) return false;
     const open = link.chans.filter((c) => c.readyState === "open");
     if (!open.length) return false;
+    // Check if channel is heavily backpressured (> 8 MB buffered)
+    for (const ch of open) {
+      if (typeof ch.bufferedAmount === "number" && ch.bufferedAmount > 8 * 1024 * 1024) return false;
+    }
     link.sent++;
     const u16 = msg.data;
     const bytes = new Uint8Array(u16.buffer, u16.byteOffset, u16.byteLength);

@@ -1013,8 +1013,14 @@ export class Qwen35Engine {
     this.pos = pos;
     this._setFrame(pos, pos + 1);
     this.device.queue.writeBuffer(this.x, 0, this._embedRowF32(tokenId));
-    const enc = this.device.createCommandEncoder();
-    for (let i = 0; i < this.layers.length; i++) this._encodeLayer(enc, i);
+    let enc = this.device.createCommandEncoder();
+    for (let i = 0; i < this.layers.length; i++) {
+      this._encodeLayer(enc, i);
+      if (i % 4 === 3 && i + 1 < this.layers.length) {
+        this.device.queue.submit([enc.finish()]);
+        enc = this.device.createCommandEncoder();
+      }
+    }
     this.device.queue.submit([enc.finish()]);
     return await this._readback(this.x, this.stageX, dim);
   }
@@ -1024,8 +1030,14 @@ export class Qwen35Engine {
     this.pos = pos;
     this._setFrame(pos, pos + 1);
     this.device.queue.writeBuffer(this.x, 0, xIn);
-    const enc = this.device.createCommandEncoder();
-    for (let i = 0; i < this.layers.length; i++) this._encodeLayer(enc, i);
+    let enc = this.device.createCommandEncoder();
+    for (let i = 0; i < this.layers.length; i++) {
+      this._encodeLayer(enc, i);
+      if (i % 4 === 3 && i + 1 < this.layers.length) {
+        this.device.queue.submit([enc.finish()]);
+        enc = this.device.createCommandEncoder();
+      }
+    }
     this.device.queue.submit([enc.finish()]);
     return await this._readback(this.x, this.stageX, dim);
   }

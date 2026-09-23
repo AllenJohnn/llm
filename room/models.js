@@ -1,23 +1,31 @@
 // Model catalogue for the room: URLs, layer counts, memory needs, context length.
 
-export const NEED_GB = { "qwen3-0.6b": 0.8, "qwen3-1.7b": 2.0, "qwen3-4b": 4.6, "qwen3.8-27b": 16.5, "smollm-135m": 0.6 };
+export const NEED_GB = { "qwen3-0.6b": 0.8, "qwen3-1.7b": 2.0, "qwen3-4b": 4.6, "qwen2.5-coder-1.5b": 1.8, "phi-4-mini": 3.2, "qwen3.8-27b": 16.5, "smollm-135m": 0.6 };
 
 export const MODELS = {
-  "qwen3-0.6b": { label: "Qwen3 0.6B · Q8", kind: "gguf",
+  "qwen3-0.6b": { label: "Qwen3 0.6B · Q8", kind: "gguf", thinking: true,
     gguf: "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf",
     cfg: "https://huggingface.co/Qwen/Qwen3-0.6B/resolve/main/config.json",
     tok: "https://huggingface.co/Qwen/Qwen3-0.6B/resolve/main/tokenizer.json" },
-  "qwen3-1.7b": { label: "Qwen3 1.7B · Q8", kind: "gguf",
+  "qwen3-1.7b": { label: "Qwen3 1.7B · Q8", kind: "gguf", thinking: true,
     gguf: "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q8_0.gguf",
     cfg: "https://huggingface.co/Qwen/Qwen3-1.7B/resolve/main/config.json",
     tok: "https://huggingface.co/Qwen/Qwen3-1.7B/resolve/main/tokenizer.json" },
-  "qwen3-4b": { label: "Qwen3 4B · Q8", kind: "gguf",
+  "qwen3-4b": { label: "Qwen3 4B · Q8", kind: "gguf", thinking: true,
     gguf: "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q8_0.gguf",
     cfg: "https://huggingface.co/Qwen/Qwen3-4B/resolve/main/config.json",
     tok: "https://huggingface.co/Qwen/Qwen3-4B/resolve/main/tokenizer.json" },
-  "qwen3.8-27b": { label: "Qwen 3.8 27B \u00b7 Q4", kind: "qwen35",
+  "qwen2.5-coder-1.5b": { label: "Qwen2.5 Coder 1.5B · Q4", kind: "gguf", thinking: false,
+    gguf: "https://hf-mirror.com/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-1.5b-instruct-q4_0.gguf",
+    ggufFallback: "https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-1.5b-instruct-q4_0.gguf",
+    cfg: "https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct/resolve/main/config.json",
+    tok: "https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct/resolve/main/tokenizer.json" },
+  "phi-4-mini": { label: "Phi-4 mini · Q4", kind: "gguf", arch: "phi3", thinking: false,
+    gguf: "https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_0.gguf",
+    cfg: "https://huggingface.co/microsoft/Phi-4-mini-instruct/resolve/main/config.json" },
+  "qwen3.8-27b": { label: "Qwen 3.8 27B \u00b7 Q4", kind: "qwen35", thinking: true,
     gguf: "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-Q4_0.gguf" },
-  "smollm-135m": { label: "SmolLM 135M · bf16", kind: "safetensors",
+  "smollm-135m": { label: "SmolLM 135M · bf16", kind: "safetensors", thinking: false,
     st: "https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/main/model.safetensors",
     cfg: "https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/main/config.json",
     tok: "https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/main/tokenizer.json" },
@@ -29,3 +37,33 @@ export const MODELS = {
 export const MAX_SEQ = 2048;
 export const MAX_NEW = 2048;   // longest answer, tokens (utilizes full remaining context)
 export const MIN_ROOM = 32;    // a prompt must leave at least this many tokens for the answer
+
+// Local model candidates for bypassing downloads during testing.
+// Place downloaded .gguf or .safetensors files in ./models/ to serve directly from local disk.
+export const LOCAL_CANDIDATES = {
+  "qwen3-0.6b": ["/models/qwen3-0.6b.gguf", "/models/Qwen3-0.6B-Q8_0.gguf", "/models/qwen/model.gguf"],
+  "qwen3-1.7b": ["/models/qwen3-1.7b.gguf", "/models/Qwen3-1.7B-Q8_0.gguf", "/models/qwen17/model.gguf"],
+  "qwen3-4b": ["/models/qwen3-4b.gguf", "/models/Qwen3-4B-Q8_0.gguf", "/models/qwen4/model.gguf"],
+  "qwen2.5-coder-1.5b": ["/models/qwen2.5-coder-1.5b-instruct-q4_0.gguf", "/models/Qwen2.5-Coder-1.5B-Instruct-Q4_0.gguf"],
+  "phi-4-mini": ["/models/microsoft_Phi-4-mini-instruct-Q4_0.gguf", "/models/Phi-4-mini-instruct-Q4_0.gguf", "/models/phi-4-mini-instruct-Q4_0.gguf", "/models/phi-4-mini.gguf"],
+  "qwen3.8-27b": ["/models/qwen3.8-27b.gguf", "/models/Qwen3.8-27B-Q4_0.gguf", "/models/q38/model.gguf"],
+  "smollm-135m": ["/models/smollm-135m.safetensors", "/models/model.safetensors"],
+};
+
+export async function detectLocalModel(modelKey) {
+  const m = MODELS[modelKey];
+  if (!m) return null;
+  const candidates = LOCAL_CANDIDATES[modelKey] || [];
+  for (const p of candidates) {
+    try {
+      const resp = await fetch(p, { method: "HEAD", headers: { "ngrok-skip-browser-warning": "1" } });
+      if (resp.ok) {
+        console.log(`[SwarmLLM] Using local model file: ${p}`);
+        if (m.gguf) m.gguf = p;
+        if (m.st) m.st = p;
+        return p;
+      }
+    } catch {}
+  }
+  return null;
+}

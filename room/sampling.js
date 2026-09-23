@@ -1,6 +1,18 @@
-// Top-k / temperature sampling over a logits vector (host CPU).
+// Top-k / temperature sampling over a logits vector with repetition penalty (host CPU).
 
-export function aiSample(logits, temp = 0.8, topk = 40) {
+export function aiSample(logits, temp = 0.8, topk = 40, recentTokens = [], repPenalty = 1.15) {
+  // Apply repetition penalty to recent tokens
+  if (repPenalty !== 1.0 && recentTokens && recentTokens.length > 0) {
+    const window = recentTokens.slice(-64);
+    const seen = new Set(window);
+    for (const id of seen) {
+      if (id >= 0 && id < logits.length) {
+        if (logits[id] > 0) logits[id] /= repPenalty;
+        else logits[id] *= repPenalty;
+      }
+    }
+  }
+
   // single-pass top-k selection: sorting all 248k logit indices cost tens of
   // milliseconds per token; this is O(n) with a tiny candidate table.
   const idx = new Int32Array(topk), val = new Float32Array(topk).fill(-Infinity);
