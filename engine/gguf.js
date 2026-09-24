@@ -172,6 +172,7 @@ export function ggmlLayerNames(i, arch = "llama") {
   return {
     inNorm: p + "attn_norm.weight",
     q: p + "attn_q.weight", k: p + "attn_k.weight", v: p + "attn_v.weight",
+    qBias: p + "attn_q.bias", kBias: p + "attn_k.bias", vBias: p + "attn_v.bias",
     o: p + "attn_output.weight",
     qNorm: p + "attn_q_norm.weight", kNorm: p + "attn_k_norm.weight", // qwen3 only
     postNorm: p + "ffn_norm.weight",
@@ -274,12 +275,15 @@ export async function ggufWeights(G, bytesOf, { lo, hi, hasEmbed, hasHead, arch 
       const gate = splitRows(fusedGU, 0, inter, cfg.hidden_size), up = splitRows(fusedGU, inter, inter, cfg.hidden_size);
       if (onEntry) { onEntry(gate, `blk.${i}.ffn_gate.weight`); onEntry(up, `blk.${i}.ffn_up.weight`); }
       layers.push({ inNorm: await entry(N.inNorm), postNorm: await entry(N.postNorm), q, k, v,
+        qBias: null, kBias: null, vBias: null,
         o: await entry(N.o), qNorm: null, kNorm: null, gate, up, down: await entry(N.down) });
       continue;
     }
     layers.push({
       inNorm: await entry(N.inNorm), postNorm: await entry(N.postNorm),
-      q: await entry(N.q), k: await entry(N.k), v: await entry(N.v), o: await entry(N.o),
+      q: await entry(N.q), k: await entry(N.k), v: await entry(N.v),
+      qBias: await entry(N.qBias, true), kBias: await entry(N.kBias, true), vBias: await entry(N.vBias, true),
+      o: await entry(N.o),
       qNorm: await entry(N.qNorm, true), kNorm: await entry(N.kNorm, true),
       gate: await entry(N.gate), up: await entry(N.up), down: await entry(N.down),
     });
@@ -423,6 +427,34 @@ export function tokenizerFromGGUF(meta) {
     },
   };
   return tj; // caller passes through makeTokenizer-compatible builder
+}
+
+// Extract complete model configuration from GGUF metadata.
+// Works offline and without external config.json files.
+export function cfgFromGGUF(G) {
+  const meta = G?.meta || {};
+  const arch = meta["general.architecture"] || "llama";
+  const p = arch + ".";
+  const numLayers = meta[p + "block_count"] ?? meta["qwen2.block_count"] ?? meta["qwen3.block_count"] ?? meta["llama.block_count"] ?? meta["phi3.block_count"] ?? 28;
+  const hiddenSize = meta[p + "embedding_length"] ?? meta["qwen2.embedding_length"] ?? meta["qwen3.embedding_length"] ?? meta["llama.embedding_length"] ?? meta["phi3.embedding_length"] ?? 3584;
+  const numHeads = meta[p + "attention.head_count"] ?? meta["qwen2.attention.head_count"] ?? meta["qwen3.attention.head_count"] ?? meta["llama.attention.head_count"] ?? meta["phi3.attention.head_count"] ?? 28;
+  const numKVHeads = meta[p + "attention.head_count_kv"] ?? meta["qwen2.attention.head_count_kv"] ?? meta["qwen3.attention.head_count_kv"] ?? meta["llama.attention.head_count_kv"] ?? meta["phi3.attention.head_count_kv"] ?? numHeads;
+  const headDim = meta[p + "attention.key_length"] ?? (hiddenSize && numHeads ? Math.round(hiddenSize / numHeads) : 128);
+  const inter = meta[p + "feed_forward_length"] ?? meta["qwen2.feed_forward_length"] ?? meta["qwen3.feed_forward_length"] ?? meta["llama.feed_forward_length"] ?? meta["phi3.feed_forward_length"] ?? Math.round(hiddenSize * 8 / 3);
+  const eps = meta[p + "attention.layer_norm_rms_epsilon"] ?? meta["qwen2.attention.layer_norm_rms_epsilon"] ?? 1e-6;
+  const theta = meta[p + "rope.freq_base"] ?? meta["qwen2.rope.freq_base"] ?? 1000000;
+  const vocab = G?.tensors?.[GGML_EMBED]?.shape?.[0] ?? G?.tensors?.[GGML_OUTPUT]?.shape?.[0] ?? meta["tokenizer.ggml.tokens"]?.length ?? 151936;
+  return {
+    num_hidden_layers: numLayers,
+    hidden_size: hiddenSize,
+    num_attention_heads: numHeads,
+    num_key_value_heads: numKVHeads,
+    head_dim: headDim,
+    intermediate_size: inter,
+    rms_norm_eps: eps,
+    rope_theta: theta,
+    vocab_size: vocab,
+  };
 }
 
 // Repack Q4_0 for the GPU: nibbles stay packed (16 bytes/block), scales split out.
@@ -592,7 +624,43 @@ export function gpuUploadEntry(device, e, keepCpu = false) {
 // repacked into a small reused staging area and written out, the rest waits
 // for the next chunk. Peak CPU memory ~ one network chunk + staging (a few
 // MB) instead of 3x the tensor. This is what keeps an iPhone tab alive.
-export async function streamEntryToGPU(device, info, openRange, { pace = 0, staging = 4 * 2 ** 20 } = {}, onProgress = () => {}) {
+// Validate HTTP range response headers (Content-Length, Content-Range, Status)
+export function validateRangeResponse(r, expectedOffset, expectedLength, tensorName = "") {
+  if (!r) throw new Error(`empty range response for ${tensorName || "tensor"}`);
+  if (!r.ok && r.status !== 206) {
+    throw new Error(`range fetch failed for ${tensorName || "tensor"} (HTTP ${r.status})`);
+  }
+  const clHeader = r.headers?.get?.("content-length") || r.headers?.get?.("x-swarm-len");
+  // If server returns HTTP 200 for a partial range (expectedOffset > 0), it ignored the Range header UNLESS it's a slice of exact expectedLength
+  if (r.status === 200 && expectedOffset > 0) {
+    if (clHeader && parseInt(clHeader, 10) !== expectedLength) {
+      throw new Error(`server ignored range request for ${tensorName || "tensor"} (returned full HTTP 200)`);
+    }
+  }
+  if (clHeader !== null && clHeader !== undefined && clHeader !== "") {
+    const len = parseInt(clHeader, 10);
+    if (!isNaN(len) && len !== expectedLength) {
+      throw new Error(`Content-Length mismatch for ${tensorName || "tensor"}: expected ${expectedLength}, got ${len}`);
+    }
+  }
+  const cr = r.headers?.get?.("content-range");
+  if (cr) {
+    const m = /bytes\s+(\d+)-(\d+)/i.exec(cr);
+    if (m) {
+      const start = parseInt(m[1], 10), end = parseInt(m[2], 10);
+      if (start !== expectedOffset || end !== expectedOffset + expectedLength - 1) {
+        throw new Error(`Content-Range mismatch for ${tensorName || "tensor"}: expected ${expectedOffset}-${expectedOffset + expectedLength - 1}, got ${m[1]}-${m[2]}`);
+      }
+    }
+  }
+}
+
+// Stream a Q4_0 / Q8_0 tensor straight from the network into GPU buffers.
+// Nothing tensor-sized ever exists in JS: chunks arrive, whole blocks are
+// repacked into a small reused staging area and written out, the rest waits
+// for the next chunk. Peak CPU memory ~ one network chunk + staging (a few
+// MB) instead of 3x the tensor. This is what keeps an iPhone tab alive.
+export async function streamEntryToGPU(device, info, openRange, { pace = 0, staging = 4 * 2 ** 20, maxRetries = 3 } = {}, onProgress = () => {}) {
   const q4 = info.ggmlType === GGML_Q4_0;
   const BLK = q4 ? 18 : Q8_0_BLOCK_BYTES;      // bytes per block in the file
   const QSB = q4 ? 16 : QK8_0;                 // quant bytes per block on the GPU
@@ -615,29 +683,72 @@ export async function streamEntryToGPU(device, info, openRange, { pace = 0, stag
     staged = 0;
     await new Promise((r) => setTimeout(r, 0));      // let WebKit hand the copy to the GPU process before we make more
   };
-  const r = await openRange(info);
-  if (!r.ok && r.status !== 206) throw new Error("range fetch failed for " + info.name);
-  const reader = r.body.getReader();
-  let carry = new Uint8Array(0);
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    onProgress(value.byteLength);
-    let buf = value;
-    if (carry.length) { const m = new Uint8Array(carry.length + value.length); m.set(carry); m.set(value, carry.length); buf = m; carry = new Uint8Array(0); }
-    const whole = Math.floor(buf.length / BLK);
-    for (let b = 0; b < whole; b++) {
-      const base = b * BLK;
-      scStage[staged] = buf[base] | (buf[base + 1] << 8);
-      qsStage.set(buf.subarray(base + 2, base + BLK), staged * QSB);
-      staged++; block++;
-      if (staged === blocksPerFlush) await flush();
+
+  let lastErr = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      const delay = Math.min(2000, 300 * Math.pow(2, attempt - 1));
+      await new Promise((r) => setTimeout(r, delay));
     }
-    const rest = buf.length - whole * BLK;
-    if (rest) carry = buf.slice(whole * BLK);
+    staged = 0;
+    block = 0;
+    let carry = new Uint8Array(0);
+    let bytesRead = 0;
+    let attemptReported = 0;
+    let reader = null;
+    const reportChunk = (n) => {
+      attemptReported += n;
+      onProgress(n);
+    };
+
+    try {
+      const r = await openRange(info);
+      validateRangeResponse(r, info.byteOffset, info.byteLength, info.name);
+      if (!r.body) throw new Error(`empty response body for ${info.name}`);
+      reader = r.body.getReader();
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        bytesRead += value.byteLength;
+        reportChunk(value.byteLength);
+        let buf = value;
+        if (carry.length) {
+          const m = new Uint8Array(carry.length + value.length);
+          m.set(carry);
+          m.set(value, carry.length);
+          buf = m;
+          carry = new Uint8Array(0);
+        }
+        const whole = Math.floor(buf.length / BLK);
+        for (let b = 0; b < whole; b++) {
+          const base = b * BLK;
+          scStage[staged] = buf[base] | (buf[base + 1] << 8);
+          qsStage.set(buf.subarray(base + 2, base + BLK), staged * QSB);
+          staged++; block++;
+          if (staged === blocksPerFlush) await flush();
+        }
+        const rest = buf.length - whole * BLK;
+        if (rest) carry = buf.slice(whole * BLK);
+      }
+      await flush();
+      if (block !== nb || bytesRead !== info.byteLength) {
+        throw new Error(`short tensor ${info.name}: got ${bytesRead}/${info.byteLength} bytes, ${block}/${nb} blocks`);
+      }
+      if (pace) await new Promise((r) => setTimeout(r, pace));   // give the allocator time to return pages
+      return { kind: q4 ? "q4" : "q8", shape: info.shape, gpu: { kind: q4 ? "q4" : "q8", qs: qsBuf, sc: scBuf } };
+    } catch (err) {
+      lastErr = err;
+      try { await reader?.cancel(err); } catch {}
+      if (attemptReported > 0) {
+        onProgress(-attemptReported);
+      }
+      if (attempt < maxRetries) {
+        console.warn(`[SwarmLLM] Range stream attempt ${attempt + 1} failed for ${info.name}: ${err.message}. Retrying...`);
+      }
+    }
   }
-  await flush();
-  if (block !== nb) throw new Error(`short tensor ${info.name}: ${block}/${nb} blocks`);
-  if (pace) await new Promise((r) => setTimeout(r, pace));   // give the allocator time to return pages
-  return { kind: q4 ? "q4" : "q8", shape: info.shape, gpu: { kind: q4 ? "q4" : "q8", qs: qsBuf, sc: scBuf } };
+
+  try { qsBuf.destroy(); } catch {}
+  try { scBuf.destroy(); } catch {}
+  throw new Error(`Failed to stream tensor ${info.name} after ${maxRetries + 1} attempts: ${lastErr?.message || lastErr}`);
 }

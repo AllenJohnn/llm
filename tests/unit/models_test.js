@@ -1,4 +1,5 @@
 import { MODELS, NEED_GB, LOCAL_CANDIDATES, detectLocalModel } from "../../room/models.js";
+import { pledgeOf, calculateClusterPledge, formatLayerRange, allocateLayers } from "../../room/allocation.js";
 
 const assert = (cond, msg) => { if (!cond) throw new Error(msg || "assertion failed"); };
 
@@ -47,3 +48,109 @@ Deno.test("models: detectLocalModel gracefully handles unreachable local files",
   const res = await detectLocalModel("non-existent-model");
   assert(res === null, "should return null for non-existent model");
 });
+
+Deno.test("models: detectLocalModel rejects truncated files and preserves original remote URLs", async () => {
+  const origFetch = globalThis.fetch;
+  const modelKey = "qwen2.5-coder-7b";
+  const originalUrl = MODELS[modelKey].gguf;
+
+  try {
+    // Simulate candidate URL returning truncated content-length (e.g. 50 MB instead of ~4.5 GB)
+    globalThis.fetch = async (url, opts) => {
+      return {
+        ok: true,
+        headers: new Headers({ "content-length": "52428800" }),
+      };
+    };
+
+    const res = await detectLocalModel(modelKey);
+    assert(res === null, "detectLocalModel should reject truncated local file");
+    assert(MODELS[modelKey].gguf === originalUrl, "gguf URL should remain original remote URL when local is truncated");
+    assert(MODELS[modelKey].originalGguf === originalUrl, "originalGguf should be preserved");
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+Deno.test("models: detectLocalModel accepts complete local files and records original URL", async () => {
+  const origFetch = globalThis.fetch;
+  const modelKey = "qwen3-0.6b";
+  const remoteUrl = MODELS[modelKey].gguf;
+
+  try {
+    // Simulate candidate URL returning complete content-length (800 MB >= required ~400 MB)
+    globalThis.fetch = async (url, opts) => {
+      return {
+        ok: true,
+        headers: new Headers({ "content-length": "838860800" }),
+      };
+    };
+
+    const res = await detectLocalModel(modelKey);
+    assert(res !== null, "detectLocalModel should accept complete local file");
+    assert(MODELS[modelKey].gguf === res, "gguf URL should be updated to local path");
+    assert(MODELS[modelKey].originalGguf === remoteUrl, "originalGguf should preserve remote fallback");
+  } finally {
+    globalThis.fetch = origFetch;
+    // restore original URL
+    MODELS[modelKey].gguf = remoteUrl;
+  }
+});
+
+Deno.test("allocation: formatLayerRange prevents negative ranges and handles edge cases", () => {
+  assert(formatLayerRange([0, 14]) === "layers 0–13", "normal multi-layer formatting");
+  assert(formatLayerRange([0, 1]) === "layer 0", "single layer formatting");
+  assert(formatLayerRange([14, 28]) === "layers 14–27", "peer range formatting");
+  // Host edge cases: lo >= hi
+  assert(formatLayerRange([0, 0], true) === "embed/head only", "host zero layers should show embed/head only");
+  assert(formatLayerRange([0, -1], true) === "embed/head only", "host negative range should not format as 0–-1");
+  // Worker edge cases: lo >= hi
+  assert(formatLayerRange([0, 0], false) === "0 layers", "worker zero layers should show 0 layers");
+  assert(formatLayerRange([5, 4], false) === "0 layers", "worker inverted range should show 0 layers");
+  // Invalid inputs
+  assert(formatLayerRange(null) === "", "null range should return empty string");
+  assert(formatLayerRange([]) === "", "empty range should return empty string");
+});
+
+Deno.test("allocation: allocateLayers prevents 0 layers when L >= peers even with low host memory", () => {
+  const L = 28;
+  const layerBytes = 150 * 1024 * 1024; // 150 MB
+  const embedBytes = 600 * 1024 * 1024; // 600 MB
+  // Host pledges 0.5 GB, workers pledge 8 GB each
+  const hostMeta = { contribGB: 0.5, webgpu: true };
+  const workerMetas = [
+    { contribGB: 8, webgpu: true },
+    { contribGB: 8, webgpu: true },
+  ];
+
+  const { assigned, ranges } = allocateLayers(L, layerBytes, embedBytes, hostMeta, workerMetas);
+
+  assert(assigned.length === 3, "should allocate across all 3 devices");
+  assert(assigned[0] >= 1, `Host must receive at least 1 layer, got ${assigned[0]}`);
+  for (let i = 0; i < assigned.length; i++) {
+    assert(assigned[i] >= 1, `Device ${i} must receive at least 1 layer, got ${assigned[i]}`);
+  }
+  const totalAssigned = assigned.reduce((a, b) => a + b, 0);
+  assert(totalAssigned === L, `Total assigned layers (${totalAssigned}) must equal L (${L})`);
+
+  // Verify contiguous ranges
+  assert(ranges[0][0] === 0, "first range must start at layer 0");
+  assert(ranges[ranges.length - 1][1] === L, `last range must end at layer ${L}`);
+  for (let i = 1; i < ranges.length; i++) {
+    assert(ranges[i][0] === ranges[i - 1][1], `range gap or overlap at index ${i}`);
+  }
+});
+
+Deno.test("allocation: pledgeOf and calculateClusterPledge exclude non-WebGPU devices", () => {
+  const webgpuPeer = { contribGB: 4, webgpu: true };
+  const cpuPeer = { contribGB: 8, webgpu: false };
+  const host = { contribGB: 2, webgpu: true };
+
+  assert(pledgeOf(webgpuPeer) === 4 * (2 ** 30), "WebGPU peer should pledge memory");
+  assert(pledgeOf(cpuPeer) === 0, "non-WebGPU peer should have 0 pledge");
+  assert(pledgeOf(null) === 0, "null peer should have 0 pledge");
+
+  const clusterPledged = calculateClusterPledge(host, [webgpuPeer, cpuPeer]);
+  assert(clusterPledged === 6, `Cluster pledged should be 2 + 4 = 6 GB, got ${clusterPledged} GB`);
+});
+

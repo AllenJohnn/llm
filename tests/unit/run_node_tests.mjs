@@ -2,6 +2,7 @@
 import { makeLink, sendFrame, attachWire, SLICE_BYTES } from "../../room/transport.js";
 import { chatRecipients, VISIBILITY } from "../../room/visibility.js";
 import { MODELS, NEED_GB, LOCAL_CANDIDATES, detectLocalModel } from "../../room/models.js";
+import { pledgeOf, calculateClusterPledge, formatLayerRange, allocateLayers } from "../../room/allocation.js";
 import { WGSL, coopWGSL } from "../../engine/engine.js";
 
 const assert = (cond, msg) => { if (!cond) throw new Error(msg || "assertion failed"); };
@@ -58,6 +59,104 @@ await test("models: local candidates defined for all models", () => {
 await test("models: detectLocalModel gracefully handles unreachable local files", async () => {
   const res = await detectLocalModel("non-existent-model");
   assert(res === null, "should return null for non-existent model");
+});
+
+await test("models: detectLocalModel rejects truncated files and preserves original remote URLs", async () => {
+  const origFetch = globalThis.fetch;
+  const modelKey = "qwen2.5-coder-7b";
+  const originalUrl = MODELS[modelKey].gguf;
+
+  try {
+    globalThis.fetch = async (url, opts) => {
+      return {
+        ok: true,
+        headers: new Headers({ "content-length": "52428800" }),
+      };
+    };
+
+    const res = await detectLocalModel(modelKey);
+    assert(res === null, "detectLocalModel should reject truncated local file");
+    assert(MODELS[modelKey].gguf === originalUrl, "gguf URL should remain original remote URL when local is truncated");
+    assert(MODELS[modelKey].originalGguf === originalUrl, "originalGguf should be preserved");
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+await test("models: detectLocalModel accepts complete local files and records original URL", async () => {
+  const origFetch = globalThis.fetch;
+  const modelKey = "qwen3-0.6b";
+  const remoteUrl = MODELS[modelKey].gguf;
+
+  try {
+    globalThis.fetch = async (url, opts) => {
+      return {
+        ok: true,
+        headers: new Headers({ "content-length": "838860800" }),
+      };
+    };
+
+    const res = await detectLocalModel(modelKey);
+    assert(res !== null, "detectLocalModel should accept complete local file");
+    assert(MODELS[modelKey].gguf === res, "gguf URL should be updated to local path");
+    assert(MODELS[modelKey].originalGguf === remoteUrl, "originalGguf should preserve remote fallback");
+  } finally {
+    globalThis.fetch = origFetch;
+    MODELS[modelKey].gguf = remoteUrl;
+  }
+});
+
+// 2. Allocation and Slicing tests
+await test("allocation: formatLayerRange prevents negative ranges and handles edge cases", () => {
+  assert(formatLayerRange([0, 14]) === "layers 0–13", "normal multi-layer formatting");
+  assert(formatLayerRange([0, 1]) === "layer 0", "single layer formatting");
+  assert(formatLayerRange([14, 28]) === "layers 14–27", "peer range formatting");
+  assert(formatLayerRange([0, 0], true) === "embed/head only", "host zero layers should show embed/head only");
+  assert(formatLayerRange([0, -1], true) === "embed/head only", "host negative range should not format as 0–-1");
+  assert(formatLayerRange([0, 0], false) === "0 layers", "worker zero layers should show 0 layers");
+  assert(formatLayerRange([5, 4], false) === "0 layers", "worker inverted range should show 0 layers");
+  assert(formatLayerRange(null) === "", "null range should return empty string");
+  assert(formatLayerRange([]) === "", "empty range should return empty string");
+});
+
+await test("allocation: allocateLayers prevents 0 layers when L >= peers even with low host memory", () => {
+  const L = 28;
+  const layerBytes = 150 * 1024 * 1024;
+  const embedBytes = 600 * 1024 * 1024;
+  const hostMeta = { contribGB: 0.5, webgpu: true };
+  const workerMetas = [
+    { contribGB: 8, webgpu: true },
+    { contribGB: 8, webgpu: true },
+  ];
+
+  const { assigned, ranges } = allocateLayers(L, layerBytes, embedBytes, hostMeta, workerMetas);
+
+  assert(assigned.length === 3, "should allocate across all 3 devices");
+  assert(assigned[0] >= 1, `Host must receive at least 1 layer, got ${assigned[0]}`);
+  for (let i = 0; i < assigned.length; i++) {
+    assert(assigned[i] >= 1, `Device ${i} must receive at least 1 layer, got ${assigned[i]}`);
+  }
+  const totalAssigned = assigned.reduce((a, b) => a + b, 0);
+  assert(totalAssigned === L, `Total assigned layers (${totalAssigned}) must equal L (${L})`);
+
+  assert(ranges[0][0] === 0, "first range must start at layer 0");
+  assert(ranges[ranges.length - 1][1] === L, `last range must end at layer ${L}`);
+  for (let i = 1; i < ranges.length; i++) {
+    assert(ranges[i][0] === ranges[i - 1][1], `range gap or overlap at index ${i}`);
+  }
+});
+
+await test("allocation: pledgeOf and calculateClusterPledge exclude non-WebGPU devices", () => {
+  const webgpuPeer = { contribGB: 4, webgpu: true };
+  const cpuPeer = { contribGB: 8, webgpu: false };
+  const host = { contribGB: 2, webgpu: true };
+
+  assert(pledgeOf(webgpuPeer) === 4 * (2 ** 30), "WebGPU peer should pledge memory");
+  assert(pledgeOf(cpuPeer) === 0, "non-WebGPU peer should have 0 pledge");
+  assert(pledgeOf(null) === 0, "null peer should have 0 pledge");
+
+  const clusterPledged = calculateClusterPledge(host, [webgpuPeer, cpuPeer]);
+  assert(clusterPledged === 6, `Cluster pledged should be 2 + 4 = 6 GB, got ${clusterPledged} GB`);
 });
 
 // 2. Visibility tests
@@ -242,6 +341,38 @@ await test("models: Qwen models have thinking enabled and SmolLM disabled", () =
   assert(MODELS["qwen3-0.6b"].thinking === true, "qwen3-0.6b should have thinking: true");
   assert(MODELS["qwen3-1.7b"].thinking === true, "qwen3-1.7b should have thinking: true");
   assert(MODELS["smollm-135m"].thinking === false, "smollm-135m should have thinking: false");
+});
+
+import { ggmlLayerNames } from "../../engine/gguf.js";
+await test("engine: ggmlLayerNames maps QKV biases for standard architectures", () => {
+  const llamaNames = ggmlLayerNames(0, "llama");
+  assert(llamaNames.qBias === "blk.0.attn_q.bias", "llama/qwen layer 0 qBias mapping missing");
+  assert(llamaNames.kBias === "blk.0.attn_k.bias", "llama/qwen layer 0 kBias mapping missing");
+  assert(llamaNames.vBias === "blk.0.attn_v.bias", "llama/qwen layer 0 vBias mapping missing");
+
+  const phiNames = ggmlLayerNames(0, "phi3");
+  assert(!phiNames.qBias, "phi3 qBias should be falsy");
+});
+
+await test("generator: WGSL defines add_bias compute pipeline", () => {
+  assert(WGSL.includes("fn add_bias("), "WGSL missing add_bias compute entry point");
+  assert(WGSL.includes("ab_x[i] += ab_b[i];"), "WGSL missing add_bias accumulation");
+});
+
+import { cfgFromGGUF, parseGGUFHeader } from "../../engine/gguf.js";
+import fs from "fs";
+await test("engine: cfgFromGGUF extracts complete architecture config from GGUF metadata", () => {
+  const fd = fs.openSync("models/qwen/model.gguf", "r");
+  const buf = Buffer.alloc(10 * 1024 * 1024);
+  fs.readSync(fd, buf, 0, buf.length, 0);
+  const G = parseGGUFHeader(buf.buffer, { skipTokenizer: true });
+  const cfg = cfgFromGGUF(G);
+  assert(cfg.hidden_size === 1024, `expected hidden_size 1024, got ${cfg.hidden_size}`);
+  assert(cfg.num_attention_heads === 16, `expected num_attention_heads 16, got ${cfg.num_attention_heads}`);
+  assert(cfg.num_key_value_heads === 8, `expected num_key_value_heads 8, got ${cfg.num_key_value_heads}`);
+  assert(cfg.num_hidden_layers === 28, `expected num_hidden_layers 28, got ${cfg.num_hidden_layers}`);
+  assert(cfg.intermediate_size === 3072, `expected intermediate_size 3072, got ${cfg.intermediate_size}`);
+  assert(cfg.vocab_size === 151936, `expected vocab_size 151936, got ${cfg.vocab_size}`);
 });
 
 import { runContextTests } from "./context_overflow_test.js";

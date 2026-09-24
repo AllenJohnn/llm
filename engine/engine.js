@@ -10,3 +10,5 @@ export { argmax } from "./sampling.js";
 export { quantizeQ4 } from "./quantize.js";
 export { parseSafetensors, tensorF32, shardTensorNames, fetchModelShard, weightsFromSafetensors } from "./safetensors.js";
 export { gpuSelfTest, kernelMicroTests } from "./selftest.js";
+
+export { cfgFromGGUF, tokenizerFromGGUF } from "./gguf.js";

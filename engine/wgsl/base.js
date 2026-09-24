@@ -237,6 +237,17 @@ fn add_res(@builtin(global_invocation_id) gid: vec3<u32>) {
   ad_x[i] += ad_y[i];
 }
 
+// --- add_bias: x += b (n elements) ---
+@group(1) @binding(0) var<storage, read_write> ab_x: array<f32>;
+@group(1) @binding(1) var<storage, read> ab_b: array<f32>;
+@group(1) @binding(2) var<uniform> ab_n: u32;
+@compute @workgroup_size(64)
+fn add_bias(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ab_n) { return; }
+  ab_x[i] += ab_b[i];
+}
+
 `;
 
 // ============ cooperative matvec family (generated) ============

@@ -15,46 +15,52 @@ export const NEED_GB = {
 
 export const MODELS = {
   "qwen3-0.6b": { label: "Qwen3 0.6B · Q8", kind: "gguf", thinking: true,
-    gguf: "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf",
-    cfg: "https://huggingface.co/Qwen/Qwen3-0.6B/resolve/main/config.json",
-    tok: "https://huggingface.co/Qwen/Qwen3-0.6B/resolve/main/tokenizer.json" },
+    gguf: "https://hf-mirror.com/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf",
+    ggufFallback: "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf",
+    cfg: "https://hf-mirror.com/Qwen/Qwen3-0.6B/resolve/main/config.json",
+    tok: "https://hf-mirror.com/Qwen/Qwen3-0.6B/resolve/main/tokenizer.json" },
   "qwen3-1.7b": { label: "Qwen3 1.7B · Q8", kind: "gguf", thinking: true,
-    gguf: "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q8_0.gguf",
-    cfg: "https://huggingface.co/Qwen/Qwen3-1.7B/resolve/main/config.json",
-    tok: "https://huggingface.co/Qwen/Qwen3-1.7B/resolve/main/tokenizer.json" },
+    gguf: "https://hf-mirror.com/Qwen/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q8_0.gguf",
+    ggufFallback: "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q8_0.gguf",
+    cfg: "https://hf-mirror.com/Qwen/Qwen3-1.7B/resolve/main/config.json",
+    tok: "https://hf-mirror.com/Qwen/Qwen3-1.7B/resolve/main/tokenizer.json" },
   "qwen3-4b": { label: "Qwen3 4B · Q8", kind: "gguf", thinking: true,
-    gguf: "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q8_0.gguf",
-    cfg: "https://huggingface.co/Qwen/Qwen3-4B/resolve/main/config.json",
-    tok: "https://huggingface.co/Qwen/Qwen3-4B/resolve/main/tokenizer.json" },
+    gguf: "https://hf-mirror.com/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q8_0.gguf",
+    ggufFallback: "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q8_0.gguf",
+    cfg: "https://hf-mirror.com/Qwen/Qwen3-4B/resolve/main/config.json",
+    tok: "https://hf-mirror.com/Qwen/Qwen3-4B/resolve/main/tokenizer.json" },
   "qwen2.5-coder-1.5b": { label: "Qwen2.5 Coder 1.5B · Q4", kind: "gguf", thinking: false,
     gguf: "https://hf-mirror.com/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-1.5b-instruct-q4_0.gguf",
     ggufFallback: "https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-1.5b-instruct-q4_0.gguf",
-    cfg: "https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct/resolve/main/config.json",
-    tok: "https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct/resolve/main/tokenizer.json" },
+    cfg: "https://hf-mirror.com/Qwen/Qwen2.5-Coder-1.5B-Instruct/resolve/main/config.json",
+    tok: "https://hf-mirror.com/Qwen/Qwen2.5-Coder-1.5B-Instruct/resolve/main/tokenizer.json" },
   "qwen2.5-coder-7b": { label: "Qwen2.5 Coder 7B · Q4 (Code & Web)", kind: "gguf", thinking: false,
     gguf: "https://hf-mirror.com/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-Q4_0.gguf",
     ggufFallback: "https://huggingface.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-Q4_0.gguf",
-    cfg: "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct/resolve/main/config.json",
-    tok: "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct/resolve/main/tokenizer.json" },
+    cfg: "https://hf-mirror.com/Qwen/Qwen2.5-Coder-7B-Instruct/resolve/main/config.json",
+    tok: "https://hf-mirror.com/Qwen/Qwen2.5-Coder-7B-Instruct/resolve/main/tokenizer.json" },
   "deepseek-r1-distill-qwen-14b": { label: "DeepSeek-R1 Distill Qwen 14B · Q4 (Reasoning)", kind: "gguf", thinking: true,
     gguf: "https://hf-mirror.com/bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-14B-Q4_0.gguf",
     ggufFallback: "https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-14B-Q4_0.gguf",
-    cfg: "https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B/resolve/main/config.json",
-    tok: "https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B/resolve/main/tokenizer.json" },
+    cfg: "https://hf-mirror.com/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B/resolve/main/config.json",
+    tok: "https://hf-mirror.com/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B/resolve/main/tokenizer.json" },
   "qwq-32b": { label: "Qwen QwQ 32B · Q4 (Deep Reasoning)", kind: "gguf", thinking: true,
     gguf: "https://hf-mirror.com/bartowski/Qwen_QwQ-32B-GGUF/resolve/main/Qwen_QwQ-32B-Q4_0.gguf",
     ggufFallback: "https://huggingface.co/bartowski/Qwen_QwQ-32B-GGUF/resolve/main/Qwen_QwQ-32B-Q4_0.gguf",
-    cfg: "https://huggingface.co/Qwen/QwQ-32B/resolve/main/config.json",
-    tok: "https://huggingface.co/Qwen/QwQ-32B/resolve/main/tokenizer.json" },
+    cfg: "https://hf-mirror.com/Qwen/QwQ-32B/resolve/main/config.json",
+    tok: "https://hf-mirror.com/Qwen/QwQ-32B/resolve/main/tokenizer.json" },
   "phi-4-mini": { label: "Phi-4 mini · Q4", kind: "gguf", arch: "phi3", thinking: false,
-    gguf: "https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_0.gguf",
-    cfg: "https://huggingface.co/microsoft/Phi-4-mini-instruct/resolve/main/config.json" },
+    gguf: "https://hf-mirror.com/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_0.gguf",
+    ggufFallback: "https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_0.gguf",
+    cfg: "https://hf-mirror.com/microsoft/Phi-4-mini-instruct/resolve/main/config.json" },
   "qwen3.8-27b": { label: "Qwen 3.8 27B · Q4", kind: "qwen35", thinking: true,
-    gguf: "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-Q4_0.gguf" },
+    gguf: "https://hf-mirror.com/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-Q4_0.gguf",
+    ggufFallback: "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-Q4_0.gguf" },
   "smollm-135m": { label: "SmolLM 135M · bf16", kind: "safetensors", thinking: false,
-    st: "https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/main/model.safetensors",
-    cfg: "https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/main/config.json",
-    tok: "https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/main/tokenizer.json" },
+    st: "https://hf-mirror.com/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/main/model.safetensors",
+    stFallback: "https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/main/model.safetensors",
+    cfg: "https://hf-mirror.com/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/main/config.json",
+    tok: "https://hf-mirror.com/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/main/tokenizer.json" },
 };
 
 // Context window per room, in tokens: prompt + answer. Each full-attention layer keeps K and V
@@ -71,7 +77,7 @@ export const LOCAL_CANDIDATES = {
   "qwen3-1.7b": ["/models/qwen3-1.7b.gguf", "/models/Qwen3-1.7B-Q8_0.gguf", "/models/qwen17/model.gguf"],
   "qwen3-4b": ["/models/qwen3-4b.gguf", "/models/Qwen3-4B-Q8_0.gguf", "/models/qwen4/model.gguf"],
   "qwen2.5-coder-1.5b": ["/models/qwen2.5-coder-1.5b-instruct-q4_0.gguf", "/models/Qwen2.5-Coder-1.5B-Instruct-Q4_0.gguf"],
-  "qwen2.5-coder-7b": ["/models/qwen2.5-coder-7b.gguf", "/models/Qwen2.5-Coder-7B-Instruct-Q4_0.gguf", "/models/qwen7b/model.gguf"],
+  "qwen2.5-coder-7b": ["/models/qwen25coder/model.gguf", "/models/qwen2.5-coder-7b.gguf", "/models/Qwen2.5-Coder-7B-Instruct-Q4_0.gguf", "/models/qwen7b/model.gguf"],
   "deepseek-r1-distill-qwen-14b": ["/models/deepseek-r1-distill-qwen-14b.gguf", "/models/DeepSeek-R1-Distill-Qwen-14B-Q4_0.gguf", "/models/r1-14b/model.gguf"],
   "qwq-32b": ["/models/qwq-32b.gguf", "/models/Qwen_QwQ-32B-Q4_0.gguf", "/models/qwq32b/model.gguf"],
   "phi-4-mini": ["/models/microsoft_Phi-4-mini-instruct-Q4_0.gguf", "/models/Phi-4-mini-instruct-Q4_0.gguf", "/models/phi-4-mini-instruct-Q4_0.gguf", "/models/phi-4-mini.gguf"],
@@ -82,11 +88,24 @@ export const LOCAL_CANDIDATES = {
 export async function detectLocalModel(modelKey) {
   const m = MODELS[modelKey];
   if (!m) return null;
+  // Preserve original remote URLs so fetch fallbacks always know the real endpoints
+  if (!m.originalGguf && m.gguf) m.originalGguf = m.gguf;
+  if (!m.originalSt && m.st) m.originalSt = m.st;
+
   const candidates = LOCAL_CANDIDATES[modelKey] || [];
+  const expectedMinBytes = ((NEED_GB[modelKey] || 0.5) * 0.45) * 1024 * 1024 * 1024;
   for (const p of candidates) {
     try {
       const resp = await fetch(p, { method: "HEAD", headers: { "ngrok-skip-browser-warning": "1" } });
       if (resp.ok) {
+        const cl = resp.headers.get("content-length");
+        if (cl) {
+          const size = parseInt(cl, 10);
+          if (size < expectedMinBytes) {
+            console.warn(`[SwarmLLM] Local model file ${p} is incomplete (${(size / 2 ** 30).toFixed(2)} GB < ${(expectedMinBytes / 2 ** 30).toFixed(2)} GB). Skipping.`);
+            continue;
+          }
+        }
         console.log(`[SwarmLLM] Using local model file: ${p}`);
         if (m.gguf) m.gguf = p;
         if (m.st) m.st = p;

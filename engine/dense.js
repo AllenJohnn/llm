@@ -20,14 +20,14 @@ export class DenseEngine {
     this.maxSeq = maxSeq;
     this.mvVariant = matvecVariant;
     this.coopWG = coopWG; this.coopRows = coopRows;
-    const dim = cfg.hidden_size;
-    const nH = cfg.num_attention_heads;
-    const nKV = cfg.num_key_value_heads;
-    const headDim = cfg.head_dim || dim / nH;
+    const dim = cfg?.hidden_size || (weights?.embed?.shape ? weights.embed.shape[1] : 3584);
+    const nH = cfg?.num_attention_heads || Math.max(1, Math.round(dim / (cfg?.head_dim || 128)));
+    const nKV = cfg?.num_key_value_heads || nH;
+    const headDim = cfg?.head_dim || (dim && nH ? Math.round(dim / nH) : 128);
     const qDim = nH * headDim;
     const kvDim = nKV * headDim;
-    const inter = cfg.intermediate_size;
-    const vocab = cfg.vocab_size;
+    const inter = cfg?.intermediate_size || Math.round(dim * 8 / 3);
+    const vocab = cfg?.vocab_size || (weights?.head?.shape ? weights.head.shape[0] : (weights?.embed?.shape ? weights.embed.shape[0] : 151936));
     this.dims = { dim, nH, nKV, headDim, qDim, kvDim, inter, vocab };
     const [lo, hi] = layerRange || [0, cfg.num_hidden_layers];
     this.lo = lo; this.hi = hi;
@@ -57,6 +57,7 @@ export class DenseEngine {
       matvec_q8_gu: ["ro", "ro", "ro", "ro", "ro", "rw", "u"], matvec_q8_gu_b: ["ro", "ro", "ro", "ro", "ro", "rw", "u"],
       matvec_q4_gu: ["ro", "ro", "ro", "ro", "ro", "rw", "u"], matvec_q4_gu_b: ["ro", "ro", "ro", "ro", "ro", "rw", "u"],
       rmsnorm: ["ro", "ro", "rw", "u"], head_norm: ["rw", "ro", "u"],
+      add_bias: ["rw", "ro", "u"],
       rope: ["rw", "u"], attn_scores: ["ro", "ro", "rw"], attn_softmax: ["rw"],
       attn_out: ["ro", "ro", "rw"], silu_mul: ["rw", "ro"], add_res: ["rw", "ro"],
     };
@@ -85,6 +86,8 @@ export class DenseEngine {
     this.nBufDim = this._buf(new Uint32Array([dim]), GPUBufferUsage.UNIFORM);
     this.nHBuf = this._buf(new Uint32Array([nH]), GPUBufferUsage.UNIFORM);
     this.nKVBuf = this._buf(new Uint32Array([nKV]), GPUBufferUsage.UNIFORM);
+    this.nBufQDim = this._buf(new Uint32Array([qDim]), GPUBufferUsage.UNIFORM);
+    this.nBufKVDim = this._buf(new Uint32Array([kvDim]), GPUBufferUsage.UNIFORM);
 
     // working buffers
     const S = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
@@ -113,6 +116,7 @@ export class DenseEngine {
     this.layers = W.layers.map((l) => ({
       inNorm: up(l.inNorm), postNorm: up(l.postNorm),
       qNorm: up(l.qNorm), kNorm: up(l.kNorm),
+      qBias: up(l.qBias), kBias: up(l.kBias), vBias: up(l.vBias),
       wq: up(l.q), wk: up(l.k), wv: up(l.v), wo: up(l.o),
       wgate: up(l.gate), wup: up(l.up), wdown: up(l.down),
       kCache: device.createBuffer({ size: maxSeq * kvDim * 4, usage: S }),
@@ -166,6 +170,9 @@ export class DenseEngine {
       q: mv(L2.wq, this.xn, this.q, qDim, dim),
       k: mv(L2.wk, this.xn, this.k, kvDim, dim),
       v: mv(L2.wv, this.xn, this.v, kvDim, dim),
+      qBias: L2.qBias ? this._bg(this.pipes.add_bias, 1, [this.q, L2.qBias.buf, this.nBufQDim]) : null,
+      kBias: L2.kBias ? this._bg(this.pipes.add_bias, 1, [this.k, L2.kBias.buf, this.nBufKVDim]) : null,
+      vBias: L2.vBias ? this._bg(this.pipes.add_bias, 1, [this.v, L2.vBias.buf, this.nBufKVDim]) : null,
       qNorm: L2.qNorm ? this._bg(this.pipes.head_norm, 1, [this.q, L2.qNorm.buf, this.nHBuf]) : null,
       kNorm: L2.kNorm ? this._bg(this.pipes.head_norm, 1, [this.k, L2.kNorm.buf, this.nKVBuf]) : null,
       scores: this._bg(this.pipes.attn_scores, 1, [this.q, L2.kCache, this.scores]),
@@ -204,7 +211,7 @@ export class DenseEngine {
 
   _buf(data, usage) {
     const src = ArrayBuffer.isView(data) ? data : new Uint8Array(data);
-    const size = Math.ceil(src.byteLength / 4) * 4;
+    const size = Math.max(4, Math.ceil(src.byteLength / 4) * 4);
     const buf = this.device.createBuffer({ size, usage, mappedAtCreation: true });
     new Uint8Array(buf.getMappedRange()).set(
       new Uint8Array(src.buffer, src.byteOffset, src.byteLength));
@@ -247,6 +254,9 @@ export class DenseEngine {
       this._dispatchOp(pass, BG.q);
       this._dispatchOp(pass, BG.k);
       this._dispatchOp(pass, BG.v);
+      if (BG.qBias) this._dispatch(pass, "add_bias", BG.qBias, qDim);
+      if (BG.kBias) this._dispatch(pass, "add_bias", BG.kBias, kvDim);
+      if (BG.vBias) this._dispatch(pass, "add_bias", BG.vBias, kvDim);
       if (BG.qNorm) this._dispatch(pass, "head_norm", BG.qNorm, nH, 32);
       if (BG.kNorm) this._dispatch(pass, "head_norm", BG.kNorm, nKV, 32);
       this._dispatch(pass, "rope", this.bgRopeQ, nH * headDim / 2);
@@ -376,7 +386,7 @@ export class DenseEngine {
     this.scoresB = [0, 1, 2, 3].map(() => dev.createBuffer({ size: nH * this.maxSeq * 4, usage: S }));
     // per-column frame uniforms + per-column group0 for the per-token kernels
     this.frameBufsB = [0, 1, 2, 3].map(() => dev.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
-    const colPipes = ["rmsnorm", "head_norm", "rope", "attn_scores", "attn_softmax", "attn_out", "silu_mul", "add_res"];
+    const colPipes = ["rmsnorm", "head_norm", "rope", "attn_scores", "attn_softmax", "attn_out", "silu_mul", "add_res", "add_bias"];
     this.bgCommonB = [0, 1, 2, 3].map((c) => {
       const m = {};
       for (const name of colPipes)
@@ -404,6 +414,9 @@ export class DenseEngine {
         cols: [0, 1, 2, 3].map((c) => ({
           norm1: bgNormC(B.x, L.inNorm, B.xn, c),
           norm2: bgNormC(B.x, L.postNorm, B.xn, c),
+          qBias: L.qBias ? this._bg2res(this.pipes.add_bias, [slice(B.q, c), { buffer: L.qBias.buf }, { buffer: this.nBufQDim }]) : null,
+          kBias: L.kBias ? this._bg2res(this.pipes.add_bias, [slice(B.k, c), { buffer: L.kBias.buf }, { buffer: this.nBufKVDim }]) : null,
+          vBias: L.vBias ? this._bg2res(this.pipes.add_bias, [slice(B.v, c), { buffer: L.vBias.buf }, { buffer: this.nBufKVDim }]) : null,
           qNorm: L.qNorm ? this._bg2res(this.pipes.head_norm, [slice(B.q, c), { buffer: L.qNorm.buf }, { buffer: this.nHBuf }]) : null,
           kNorm: L.kNorm ? this._bg2res(this.pipes.head_norm, [slice(B.k, c), { buffer: L.kNorm.buf }, { buffer: this.nKVBuf }]) : null,
           ropeQ: this._bg2res(this.pipes.rope, [slice(B.q, c), { buffer: this.nHBuf }]),
@@ -446,6 +459,9 @@ export class DenseEngine {
       for (const op of LB.qkv) this._dispatchOp(pass, op);
       for (let c = 0; c < 4; c++) {
         const C = LB.cols[c];
+        if (C.qBias) this._dCol(pass, "add_bias", c, C.qBias, qDim);
+        if (C.kBias) this._dCol(pass, "add_bias", c, C.kBias, kvDim);
+        if (C.vBias) this._dCol(pass, "add_bias", c, C.vBias, kvDim);
         if (C.qNorm) this._dCol(pass, "head_norm", c, C.qNorm, nH, 32);
         if (C.kNorm) this._dCol(pass, "head_norm", c, C.kNorm, nKV, 32);
         this._dCol(pass, "rope", c, C.ropeQ, nH * headDim / 2);

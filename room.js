@@ -3,7 +3,7 @@
 import { autotuneCoop, makeTokenizer, DenseEngine, argmax, fetchModelShard, shardTensorNames, gpuSelfTest, kernelMicroTests }
   from "./engine/engine.js";
 import { f32ToF16, f16ToF32, parseGGUFHeader, ggufWeights, ggufShardBytes, GGML_EMBED, GGML_OUTPUT, GGML_FINAL_NORM,
-  ggmlLayerNames, qwen35Weights, qwen35ShardBytes, qwen35MtpBytes, qwen35LayerNames, tokenizerFromGGUF, gpuUploadEntry, streamEntryToGPU }
+  ggmlLayerNames, qwen35Weights, qwen35ShardBytes, qwen35MtpBytes, qwen35LayerNames, tokenizerFromGGUF, cfgFromGGUF, gpuUploadEntry, streamEntryToGPU, validateRangeResponse }
   from "./engine/gguf.js";
 import { Qwen35Engine } from "./engine/qwen35.js";
 import { WIRE_F16, badF32, f32ToB64, packF16, unpackF16, asU16, packWire, unpackWire, asF32, b64ToF32 } from "./room/wire.js";
@@ -12,6 +12,7 @@ import { aiSample } from "./room/sampling.js";
 import { chatRecipients } from "./room/visibility.js";
 import { MODELS, NEED_GB, MAX_SEQ, MAX_NEW, MIN_ROOM, detectLocalModel } from "./room/models.js";
 import { makeLink, attachWire, wireReady, sendFrame, resetLink } from "./room/transport.js";
+import { pledgeOf, calculateClusterPledge, formatLayerRange, allocateLayers } from "./room/allocation.js";
 
 // Hidden-state transport (room/transport.js). ?wire=off falls back to PeerJS messages;
 // ?wire=slice uses one sliced channel; ?wire=stripeN spreads slices over N peer connections.
@@ -126,16 +127,17 @@ const metaPromise = (async () => {
   try {
     const m = await probeGPU();
     if (m.webgpu && m.budgetGB) m.contribGB = Math.max(0.2, Math.round(m.budgetGB * 0.5 * 10) / 10);
+    else if (!m.webgpu) m.contribGB = 0;
     m.phone = m.ua === "iPhone" || m.ua === "Android";
     const gbEl = $("join-gb");
     if (gbEl) {
-      if (m.phone) { m.contribGB = 0.5; gbEl.min = "0.5"; gbEl.step = "0.5"; }
-      else if (m.contribGB) m.contribGB = Math.max(1, Math.round(m.contribGB));
-      if (m.contribGB) gbEl.value = m.contribGB;
+      if (!m.webgpu) { gbEl.value = "0"; gbEl.disabled = true; }
+      else if (m.phone) { m.contribGB = 0.5; gbEl.min = "0.5"; gbEl.step = "0.5"; gbEl.value = "0.5"; }
+      else if (m.contribGB) { m.contribGB = Math.max(1, Math.round(m.contribGB)); gbEl.value = m.contribGB; }
     }
     return m;
   } catch (e) {
-    return { ua: "Device", webgpu: false, gpu: "no WebGPU", maxBufGB: 0, contribGB: 1 };
+    return { ua: "Device", webgpu: false, gpu: "no WebGPU", maxBufGB: 0, contribGB: 0 };
   }
 })();
 
@@ -343,11 +345,11 @@ $("ai-model").addEventListener("change", () => updateCluster());
 function updateCluster() {
   const all = [myMeta, ...[...members.values()].map(m => m.meta)];
   const gpus = all.filter(m => m && m.webgpu).length;
-  const pledged = all.reduce((s, m) => s + (m?.contribGB || 0), 0);
+  const pledged = calculateClusterPledge(myMeta, [...members.values()].map(m => m.meta));
   updateNeed(pledged);
-  const mem = all.reduce((s, m) => s + (m?.budgetGB || m?.maxBufGB || 0), 0);
+  const mem = all.filter(m => m && m.webgpu).reduce((s, m) => s + (m?.budgetGB || m?.maxBufGB || 0), 0);
   $("cluster-summary").textContent =
-    `${all.length} device${all.length > 1 ? "s" : ""} \u00b7 ${gpus} WebGPU \u00b7 ${pledged.toFixed(1)} GB pledged`;
+    `${all.length} device${all.length > 1 ? "s" : ""} · ${gpus} WebGPU · ${pledged.toFixed(1)} GB pledged`;
   updateTopbarPeers();
 }
 
@@ -809,6 +811,7 @@ async function getWeightCache() {
 }
 function cacheKey(url, lo, hi) { return "https://weights.swarmllm.ai/" + encodeURIComponent(url) + "/" + lo + "-" + hi; }
 async function rangeFetch(url, lo, hi, noCache = false) {
+  const expectedLen = hi - lo + 1;
   const c = await getWeightCache();
   const key = cacheKey(url, lo, hi);
   if (c && !noCache) {
@@ -816,7 +819,8 @@ async function rangeFetch(url, lo, hi, noCache = false) {
       const hit = await c.match(key);
       if (hit) {
         // only trust a complete entry: a tab that died mid-write leaves a short one behind
-        if (hit.headers.get("x-swarm-len") === String(hi - lo + 1)) { cacheHits += hi - lo + 1; return hit; }
+        const cl = hit.headers.get("x-swarm-len") || hit.headers.get("content-length");
+        if (cl === String(expectedLen)) { cacheHits += expectedLen; return hit; }
         c.delete(key).catch(() => {});
       }
     } catch {}
@@ -824,34 +828,94 @@ async function rangeFetch(url, lo, hi, noCache = false) {
   const headers = { Range: `bytes=${lo}-${hi}` };
   if (url.includes("ngrok")) headers["ngrok-skip-browser-warning"] = "1";
   const model = MODELS[ai.model];
-  const requestUrl = url.startsWith("https://hf-mirror.com/") && model?.ggufFallback && model.gguf === model.ggufFallback
+  let currentUrl = url.startsWith("https://hf-mirror.com/") && model?.ggufFallback && model.gguf === model.ggufFallback
     ? model.ggufFallback : url;
-  let r;
-  try { r = await fetch(requestUrl, { headers }); } catch (err) {
-    if (!url.startsWith("https://hf-mirror.com/") || !model?.ggufFallback) throw err;
-    r = await fetch(model.ggufFallback, { headers });
-    if (r.status === 206) model.gguf = model.ggufFallback;
-    else throw new Error("fast mirror and Hugging Face fallback both failed (HTTP " + r.status + ")");
-  }
-  if (url.startsWith("https://hf-mirror.com/") && requestUrl === url && r.status !== 206) {
-    if (model?.ggufFallback) {
-      const fallback = await fetch(model.ggufFallback, { headers });
-      if (fallback.status === 206) { r = fallback; model.gguf = model.ggufFallback; }
-      else throw new Error("fast mirror and Hugging Face fallback both failed (HTTP " + fallback.status + ")");
+
+  const maxRetries = 3;
+  let lastErr = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      const delay = Math.min(2000, 300 * Math.pow(2, attempt - 1));
+      await new Promise((r) => setTimeout(r, delay));
+    }
+    try {
+      let r;
+      try {
+        r = await fetch(currentUrl, { headers });
+      } catch (err) {
+        const isLocal = currentUrl.startsWith("/") || currentUrl.includes("://127.0.0.1") || currentUrl.includes("://localhost");
+        if (isLocal && (model?.originalGguf || model?.ggufFallback)) {
+          console.warn(`[SwarmLLM] Local fetch failed for ${currentUrl}, falling back to remote URL`);
+          currentUrl = model.originalGguf || model.ggufFallback;
+          if (model.gguf) model.gguf = currentUrl;
+          r = await fetch(currentUrl, { headers });
+        } else if (currentUrl.startsWith("https://hf-mirror.com/") && model?.ggufFallback) {
+          currentUrl = model.ggufFallback;
+          if (model.gguf) model.gguf = currentUrl;
+          r = await fetch(currentUrl, { headers });
+        } else {
+          throw err;
+        }
+      }
+
+      if (r.status !== 206 && r.status !== 200) {
+        const isLocal = currentUrl.startsWith("/") || currentUrl.includes("://127.0.0.1") || currentUrl.includes("://localhost");
+        if (isLocal && (model?.originalGguf || model?.ggufFallback)) {
+          console.warn(`[SwarmLLM] Local URL returned HTTP ${r.status}, falling back to remote URL`);
+          currentUrl = model.originalGguf || model.ggufFallback;
+          if (model.gguf) model.gguf = currentUrl;
+          r = await fetch(currentUrl, { headers });
+        } else if (currentUrl.startsWith("https://hf-mirror.com/") && model?.ggufFallback) {
+          currentUrl = model.ggufFallback;
+          if (model.gguf) model.gguf = currentUrl;
+          r = await fetch(currentUrl, { headers });
+        }
+      }
+
+      if (r.status !== 206 && r.status !== 200) {
+        throw new Error("model host refused range requests (HTTP " + r.status + ")");
+      }
+      // If server returned HTTP 200 for a partial range, it ignored the Range header UNLESS it's a slice of exact expectedLength
+      const cl = r.headers.get("content-length") || r.headers.get("x-swarm-len");
+      if (r.status === 200 && lo > 0) {
+        if (cl && parseInt(cl, 10) !== expectedLen) {
+          throw new Error("server ignored Range header and returned full response (HTTP 200)");
+        }
+      }
+      // Validate Content-Length if present
+      if (cl !== null && cl !== undefined && cl !== "") {
+        const len = parseInt(cl, 10);
+        if (!isNaN(len) && len !== expectedLen) {
+          throw new Error(`Content-Length mismatch: expected ${expectedLen}, got ${len}`);
+        }
+      }
+
+      const isLocal = currentUrl.startsWith("/") || currentUrl.includes("://127.0.0.1") || currentUrl.includes("://localhost");
+      if (c && !myMeta?.phone && !isLocal && !noCache) {
+        try {
+          r.clone().arrayBuffer().then((buf) => {
+            if (buf.byteLength !== expectedLen) return;
+            return c.put(key, new Response(buf, {
+              status: 200,
+              headers: {
+                "content-type": "application/octet-stream",
+                "content-length": String(buf.byteLength),
+                "x-swarm-len": String(buf.byteLength),
+                "content-range": `bytes ${lo}-${hi}/*`
+              }
+            }));
+          }).then(() => { ai.cachedBytes = (ai.cachedBytes || 0) + expectedLen; }).catch(() => {});
+        } catch {}
+      }
+      return r;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxRetries) {
+        console.warn(`[SwarmLLM] rangeFetch attempt ${attempt + 1} failed for ${currentUrl} [${lo}-${hi}]: ${err.message}. Retrying...`);
+      }
     }
   }
-  if (r.status !== 206 && r.status !== 200) throw new Error("model host refused range requests (HTTP " + r.status + ")");
-  const isLocal = url.startsWith("/") || url.includes("://127.0.0.1") || url.includes("://localhost");
-  if (c && !myMeta?.phone && !isLocal) {   // phones skip the store; local files don't need cache
-    try {
-      // buffer the copy fully first, so a complete body is the only thing that ever gets stored
-      r.clone().arrayBuffer().then((buf) => {
-        if (buf.byteLength !== hi - lo + 1) return;
-        return c.put(key, new Response(buf, { status: 200, headers: { "content-type": "application/octet-stream", "x-swarm-len": String(buf.byteLength) } }));
-      }).then(() => { ai.cachedBytes = (ai.cachedBytes || 0) + (hi - lo + 1); }).catch(() => {});
-    } catch {}
-  }
-  return r;
+  throw new Error(`rangeFetch failed for ${currentUrl} [${lo}-${hi}] after ${maxRetries + 1} attempts: ${lastErr?.message || lastErr}`);
 }
 async function fetchGGUFHeader(url, needTokenizer = true) {
   let size = 12 * 2 ** 20;
@@ -868,7 +932,6 @@ const streamWithRetry = (url, streamOpts) => async (info, onProgress) => {
   const report = (n) => { received += n; onProgress?.(n); };
   try { return await streamEntryToGPU(ai.device, info, openRangeOf(url), streamOpts, report); }
   catch (e) {
-    if (!/short tensor/.test(String(e))) throw e;
     if (received) { report(-received); received = 0; }
     const c = await getWeightCache();
     if (c) c.delete(cacheKey(url, info.byteOffset, info.byteOffset + info.byteLength - 1)).catch(() => {});
@@ -883,32 +946,51 @@ const openRangeOf = (url) => async (info) => {
 const rangeBytesOf = (url) => async (info, onProgress = () => {}) => {
   if (pacerHook) await pacerHook();
   crumb("fetching " + info.name + " (" + (info.byteLength / 2 ** 20).toFixed(0) + " MB)");
-  const read = async (r, report) => {
-    const bytes = new Uint8Array(info.byteLength);
-    const reader = r.body.getReader();
-    let offset = 0;
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      if (offset + value.byteLength > bytes.length) throw new Error(`oversized download for ${info.name}`);
-      bytes.set(value, offset); offset += value.byteLength; report(value.byteLength);
+  const maxRetries = 3;
+  let lastErr = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      const delay = Math.min(2000, 300 * Math.pow(2, attempt - 1));
+      await new Promise((r) => setTimeout(r, delay));
     }
-    return { bytes, offset };
-  };
-  let received = 0;
-  const report = (n) => { received += n; onProgress(n); };
-  let r = await rangeFetch(url, info.byteOffset, info.byteOffset + info.byteLength - 1);
-  let result = await read(r, report);
-  if (result.offset !== info.byteLength) {
-    if (received) { report(-received); received = 0; }
-    r = await rangeFetch(url, info.byteOffset, info.byteOffset + info.byteLength - 1, true);
-    result = await read(r, report);
-    if (result.offset !== info.byteLength) throw new Error(`short download for ${info.name}: ${result.offset}/${info.byteLength} bytes`);
+    let attemptReported = 0;
+    let reader = null;
+    const reportChunk = (n) => { attemptReported += n; onProgress(n); };
+    try {
+      const bypassCache = attempt > 0;
+      const r = await rangeFetch(url, info.byteOffset, info.byteOffset + info.byteLength - 1, bypassCache);
+      validateRangeResponse(r, info.byteOffset, info.byteLength, info.name);
+      const bytes = new Uint8Array(info.byteLength);
+      if (!r.body) throw new Error(`empty response body for ${info.name}`);
+      reader = r.body.getReader();
+      let offset = 0;
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (offset + value.byteLength > bytes.length) throw new Error(`oversized download for ${info.name}`);
+        bytes.set(value, offset);
+        offset += value.byteLength;
+        reportChunk(value.byteLength);
+      }
+      if (offset !== info.byteLength) {
+        throw new Error(`short download for ${info.name}: ${offset}/${info.byteLength} bytes`);
+      }
+      return bytes;
+    } catch (err) {
+      lastErr = err;
+      try { await reader?.cancel(err); } catch {}
+      if (attemptReported > 0) onProgress(-attemptReported);
+      if (attempt < maxRetries) {
+        console.warn(`[SwarmLLM] Range download attempt ${attempt + 1} failed for ${info.name}: ${err.message}. Retrying...`);
+      }
+    }
   }
-  return result.bytes;
+  throw new Error(`Failed to download tensor ${info.name} after ${maxRetries + 1} attempts: ${lastErr?.message || lastErr}`);
 };
 
 // ai state is initialized at top of module
+
+export { formatLayerRange };
 
 function aiStatus(s) { $("ai-status").textContent = s; crumb(s); }
 // breadcrumb: if iOS kills the tab, the reloaded page can say where it died
@@ -930,7 +1012,8 @@ function loadCardRender() {
   rows.innerHTML = names.map((nm) => {
     const pct = Math.max(0, Math.min(100, (ai.prog || {})[nm] ?? 0));
     const l = layersOf(nm);
-    return `<div class="lc-row${pct >= 100 ? " done" : ""}"><div class="n">${nm}${l ? `<small>layers ${l}</small>` : ""}</div><div class="bar"><div class="fill" style="width:${pct}%"></div></div><div class="pct">${pct >= 100 ? "ready" : pct + "%"}</div></div>`;
+    const layerDesc = l ? (l.startsWith("layer") || l.startsWith("embed") || l.includes("only") ? l : `layers ${l}`) : "";
+    return `<div class="lc-row${pct >= 100 ? " done" : ""}"><div class="n">${nm}${layerDesc ? `<small>${layerDesc}</small>` : ""}</div><div class="bar"><div class="fill" style="width:${pct}%"></div></div><div class="pct">${pct >= 100 ? "ready" : pct + "%"}</div></div>`;
   }).join("");
   updateTopbarPeers();
   if (ai.isDownloading) {
@@ -1237,7 +1320,7 @@ function chatBotEnd(raw, stats, capped = false) {
 async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
   const M = MODELS[modelKey];
   ai.model = modelKey;
-  aiLoading(true, `downloading layers ${range[0]}\u2013${range[1] - 1} of ${M.label.split("\u00b7")[0].trim()}`);
+  aiLoading(true, `downloading ${formatLayerRange(range, hasEmbed)} of ${M.label.split("\u00b7")[0].trim()}`);
   aiStatus("requesting GPU\u2026");
   mascot("Grabbing my slice of the model… hang tight.");
   // a previous attempt in this tab still owns its weights: release them first, or the
@@ -1278,15 +1361,19 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
   ai.myPct = 0;
   ai.prog = { [myName]: 0 }; ai.progAt = { [myName]: Date.now() };
   const streamOpts = { pace: isPhone ? 300 : 0, staging: isPhone ? 2 * 2 ** 20 : 8 * 2 ** 20 };
-  if (M.cfg && !ai.cfg) {
+  if (M.kind === "gguf") {
+    try {
+      const G = ai.G && ai.GModel === modelKey ? ai.G : await fetchGGUFHeader(M.gguf, M.arch === "phi3");
+      ai.G = G; ai.GModel = modelKey;
+      ai.cfg = { ...cfgFromGGUF(G), ...(ai.cfg || {}) };
+    } catch (e) {
+      console.warn("Could not parse GGUF header for config:", e);
+    }
+  } else if (M.cfg && !ai.cfg) {
     try {
       ai.cfg = await (await fetch(M.cfg)).json();
     } catch (e) {
-      console.warn("Could not fetch remote config.json, using GGUF header:", e);
-      const G = ai.G && ai.GModel === modelKey ? ai.G : await fetchGGUFHeader(M.gguf, false);
-      ai.G = G; ai.GModel = modelKey;
-      const L = G.meta["qwen2.block_count"] || G.meta["phi3.block_count"] || G.meta["llama.block_count"] || 28;
-      ai.cfg = { num_hidden_layers: L };
+      console.warn("Could not fetch remote config.json:", e);
     }
   }
   if (ai.cfg && M.arch === "phi3") {
@@ -1294,18 +1381,29 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
     ai.cfg.rope_dim = Math.floor(ai.cfg.head_dim * (ai.cfg.partial_rotary_factor || 0.75));
   }
   if (hasEmbed || hasHead) {
-    if (M.arch === "phi3" || !M.tok) {
-      const tokenHeader = ai.G && ai.GModel === modelKey && ai.G.meta["tokenizer.ggml.tokens"] ? ai.G : await fetchGGUFHeader(M.gguf, true);
-      ai.G = tokenHeader; ai.GModel = modelKey;
-      ai.tok = makeTokenizer(tokenizerFromGGUF(tokenHeader.meta));
-    } else {
+    let loadedFromGGUF = false;
+    if (M.gguf) {
       try {
-        ai.tok = makeTokenizer(await (await fetch(M.tok)).json());
-      } catch (e) {
-        console.warn("Could not fetch remote tokenizer.json, reading from GGUF:", e);
         const tokenHeader = ai.G && ai.GModel === modelKey && ai.G.meta["tokenizer.ggml.tokens"] ? ai.G : await fetchGGUFHeader(M.gguf, true);
-        ai.G = tokenHeader; ai.GModel = modelKey;
-        ai.tok = makeTokenizer(tokenizerFromGGUF(tokenHeader.meta));
+        if (tokenHeader && tokenHeader.meta && tokenHeader.meta["tokenizer.ggml.tokens"]) {
+          ai.G = tokenHeader; ai.GModel = modelKey;
+          ai.tok = makeTokenizer(tokenizerFromGGUF(tokenHeader.meta));
+          loadedFromGGUF = true;
+        }
+      } catch (err) {
+        console.warn("Could not read tokenizer directly from GGUF header, trying remote fallback:", err);
+      }
+    }
+    if (!loadedFromGGUF) {
+      if (M.tok) {
+        try {
+          ai.tok = makeTokenizer(await (await fetch(M.tok)).json());
+        } catch (e) {
+          console.warn("Could not fetch remote tokenizer.json, reading from GGUF:", e);
+          const tokenHeader = ai.G && ai.GModel === modelKey && ai.G.meta["tokenizer.ggml.tokens"] ? ai.G : await fetchGGUFHeader(M.gguf, true);
+          ai.G = tokenHeader; ai.GModel = modelKey;
+          ai.tok = makeTokenizer(tokenizerFromGGUF(tokenHeader.meta));
+        }
       }
     }
   }
@@ -1360,6 +1458,7 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
     aiStatus("reading model index\u2026");
     const G = ai.G && ai.GModel === modelKey ? ai.G : await fetchGGUFHeader(M.gguf, M.arch === "phi3");
     ai.G = G; ai.GModel = modelKey;
+    ai.cfg = { ...cfgFromGGUF(G), ...(ai.cfg || {}) };
     const opts = { lo: range[0], hi: range[1], hasEmbed, hasHead, arch: M.arch, cfg: ai.cfg };
     const total = ggufShardBytes(G, opts);
     G.streamEntry = streamWithRetry(M.gguf, streamOpts);
@@ -1373,7 +1472,17 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
     });
   } else {
     const names = shardTensorNames(ai.cfg, range, hasEmbed, hasHead);
-    const tensors = await fetchModelShard(M.st, names, (p, done, total) => onProg(done, total));
+    let tensors;
+    try {
+      tensors = await fetchModelShard(M.st, names, (p, done, total) => onProg(done, total));
+    } catch (err) {
+      if (M.stFallback) {
+        console.warn(`[SwarmLLM] fetchModelShard failed for ${M.st}, falling back to ${M.stFallback}:`, err);
+        tensors = await fetchModelShard(M.stFallback, names, (p, done, total) => onProg(done, total));
+      } else {
+        throw err;
+      }
+    }
     aiStatus("building GPU pipelines\u2026");
     ai.engine = await DenseEngine.create({
       coopWG: ai.tune?.wg, coopRows: ai.tune?.rows,
@@ -1396,12 +1505,12 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
     if (!peersWaiting.length) {
       aiLoading(false);
     } else {
-      aiLoading(true, `layers ${range[0]}\u2013${range[1] - 1} ready \u00b7 syncing cluster`);
+      aiLoading(true, `${formatLayerRange(range, true)} ready \u00b7 syncing cluster`);
       $("ldg-sub").textContent = `waiting for ${peersWaiting.length} peer(s) to finish…`;
       $("ldg-fill").style.width = "100%";
     }
   } else {
-    aiLoading(true, `layers ${range[0]}\u2013${range[1] - 1} ready`);
+    aiLoading(true, `${formatLayerRange(range, false)} ready`);
     $("ldg-sub").textContent = "syncing with the rest of the room";
     $("ldg-fill").style.width = "100%";
   }
@@ -1440,7 +1549,10 @@ async function aiStart(modelArg) {
     ai.model = modelKey;
     await detectLocalModel(modelKey);
     const M = MODELS[modelKey];
-    ai.chain = [...conns.keys()].sort();
+    ai.chain = [...conns.keys()].filter((id) => {
+      const c = conns.get(id);
+      return c && c.conn?.open !== false && c.meta?.webgpu !== false;
+    }).sort();
     ai.plan = new Map();                      // name -> load message, so a reloaded device can be re-seated
     ai.chainNames = ai.chain.map((id) => conns.get(id)?.name || id);
     const n = ai.chain.length + 1;
@@ -1452,14 +1564,23 @@ async function aiStart(modelArg) {
       L = ai.G.meta["qwen35.block_count"] - (ai.G.meta["qwen35.nextn_predict_layers"] || 0);
       layerBytes = qwen35ShardBytes(ai.G, { lo: 0, hi: 4, hasEmbed: false, hasHead: false }) / 4;
       embedBytes = (ai.G.tensors[GGML_EMBED]?.byteLength || 0) + (ai.G.tensors[GGML_OUTPUT]?.byteLength || 0) + qwen35MtpBytes(ai.G);
+    } else if (M.kind === "gguf") {
+      aiStatus("reading model index\u2026");
+      ai.G = await fetchGGUFHeader(M.gguf, M.arch === "phi3");
+      ai.GModel = modelKey;
+      ai.cfg = { ...cfgFromGGUF(ai.G), ...(ai.cfg || {}) };
+      L = ai.cfg.num_hidden_layers;
+      cfg = ai.cfg;
     } else {
       try {
         cfg = await (await fetch(M.cfg)).json();
         L = cfg.num_hidden_layers;
+        ai.cfg = cfg;
       } catch (e) {
         console.warn('Could not fetch remote config, using default/meta:', e);
         L = 28;
         cfg = { num_hidden_layers: L };
+        ai.cfg = cfg;
       }
     }
 
@@ -1477,24 +1598,8 @@ async function aiStart(modelArg) {
       layerBytes = (2 * d * d + 2 * kvDim * d + 3 * cfg.intermediate_size * d) * 4;
       embedBytes = cfg.vocab_size * d * 4;
     }
-    const pledgeOf = (m) => ((m?.contribGB ?? (m?.maxBufGB ? m.maxBufGB * 0.5 : 0.5))) * 2 ** 30;
-    const parts = [
-      { cap: Math.max(pledgeOf(myMeta) - embedBytes, layerBytes / 2) },
-      ...ai.chain.map((id) => ({ cap: Math.max(pledgeOf(conns.get(id)?.meta), layerBytes / 2) })),
-    ];
-    const totalCap = parts.reduce((s, p) => s + p.cap, 0);
-    const assigned = parts.map((p) => Math.floor(L * p.cap / totalCap));
-    const fracs = parts.map((p, i) => ({ i, f: L * p.cap / totalCap - assigned[i] })).sort((a, b) => b.f - a.f);
-    let rem = L - assigned.reduce((a, b) => a + b, 0);
-    for (let k = 0; k < rem; k++) assigned[fracs[k % fracs.length].i]++;
-    for (let i = 1; i < assigned.length; i++)
-      if (assigned[i] === 0) { const j = assigned.indexOf(Math.max(...assigned)); assigned[j]--; assigned[i]++; }
-    const ranges = [];
-    let acc = 0;
-    for (const a of assigned) { ranges.push([acc, acc + a]); acc += a; }
-
-    const needGB = (L * layerBytes + embedBytes) / 2 ** 30;
-    const haveGB = parts.reduce((s, p) => s + p.cap, embedBytes) / 2 ** 30;
+    const peerMetas = ai.chain.map((id) => conns.get(id)?.meta);
+    const { assigned, ranges, needGB, haveGB } = allocateLayers(L, layerBytes, embedBytes, myMeta, peerMetas);
     if (needGB > haveGB * 1.15)
       log("swarm", `\u26a0 this model needs ~${needGB.toFixed(1)} GB but the room pledged ~${haveGB.toFixed(1)} GB \u2014 it may not fit`);
 
@@ -1504,13 +1609,14 @@ async function aiStart(modelArg) {
         t: "ai-load", model: modelKey, range: ranges[i + 1],
         next: i + 1 < ai.chain.length ? ai.chain[i + 1] : "host",
         host: peer.id,
+        cfg: ai.cfg,
       };
       const small = false;   // everyone downloads at once (phones used to wait; the wait itself was the problem)
       ai.plan.set(conns.get(id)?.name || id, { msg, small });
       if (small) { ai.deferred.push({ id, msg }); sendTo(id, { t: "ai-wait" }); }
       else sendTo(id, msg);
     });
-    ai.layersByName = Object.fromEntries([[myName, `${ranges[0][0]}\u2013${ranges[0][1] - 1}`], ...ai.chain.map((id, i) => [conns.get(id)?.name || id, `${ranges[i + 1][0]}\u2013${ranges[i + 1][1] - 1}`])]);
+    ai.layersByName = Object.fromEntries([[myName, formatLayerRange(ranges[0], true)], ...ai.chain.map((id, i) => [conns.get(id)?.name || id, formatLayerRange(ranges[i + 1], false)])]);
     broadcastAll({ t: "ai-layers", by: ai.layersByName });
     const splitDesc = [`you ${assigned[0]}+embed`, ...ai.chain.map((id, i) =>
       `${conns.get(id)?.name || id} ${assigned[i + 1]}`)].join(" \u00b7 ");
@@ -1518,7 +1624,7 @@ async function aiStart(modelArg) {
     await aiLoadShard(modelKey, ranges[0], true, true);
     aiStatus(n === 1
       ? `solo: all ${L} layers local \u2014 ready`
-      : `layers ${ranges[0][0]}\u2013${ranges[0][1] - 1} ready \u00b7 syncing with ${ai.chain.length} device${ai.chain.length > 1 ? "s" : ""}\u2026`);
+      : `${formatLayerRange(ranges[0], true)} ready \u00b7 syncing with ${ai.chain.length} device${ai.chain.length > 1 ? "s" : ""}\u2026`);
     aiMaybeReady();
   } catch (err) {
     clearInterval(ai.progTimer);
@@ -1954,13 +2060,14 @@ async function aiOnData(from, d) {
       ai.role = "worker";
       ai.next = d.next;
       ai.hostId = d.host;
+      if (d.cfg) ai.cfg = { ...(ai.cfg || {}), ...d.cfg };
       ensureLink(d.next);   // open the link to my chain neighbour while the weights download
       try {
         await detectLocalModel(d.model || "smollm-135m");
         await aiLoadShard(d.model || "smollm-135m", d.range, false, false);
         if (!(await ensureLink(d.next))) throw new Error("could not connect to the next device in the chain");
-        aiStatus(`layers ${d.range[0]}\u2013${d.range[1] - 1} ready \u00b7 syncing with the room\u2026`);
-        aiLoading(true, `layers ${d.range[0]}\u2013${d.range[1] - 1} ready`);
+        aiStatus(`${formatLayerRange(d.range, false)} ready \u00b7 syncing with the room\u2026`);
+        aiLoading(true, `${formatLayerRange(d.range, false)} ready`);
         $("ldg-sub").textContent = "syncing with the rest of the room";
         $("ldg-fill").style.width = "100%";
         sendTo(ai.hostId, { t: "ai-ready", from: peer.id });
@@ -2074,8 +2181,8 @@ async function aiOnData(from, d) {
         if (badF32(hin)) { aiStatus(`\u26a0 NaN ARRIVED at this device (pos ${d.pos}) \u2014 upstream peer broken`); }
         const h = await ai.engine.runHidden(hin, d.pos);
         if (badF32(h)) {
-          aiStatus(`\u26a0 NaN PRODUCED by this device (pos ${d.pos}, layers ${ai.range[0]}\u2013${ai.range[1] - 1}) \u2014 GPU kernel issue here`);
-          sendTo(ai.hostId, { t: "ai-error", message: `NaN produced on worker layers ${ai.range[0]}\u2013${ai.range[1] - 1}` });
+          aiStatus(`\u26a0 NaN PRODUCED by this device (pos ${d.pos}, ${formatLayerRange(ai.range, false)}) \u2014 GPU kernel issue here`);
+          sendTo(ai.hostId, { t: "ai-error", message: `NaN produced on worker ${formatLayerRange(ai.range, false)}` });
           return;
         }
         const msg = { pos: d.pos, ...packWire(h) };
@@ -2086,7 +2193,7 @@ async function aiOnData(from, d) {
           console.warn(`Worker failed to send hidden at pos ${d.pos} to ${ai.next}`);
           if (ai.hostId) sendTo(ai.hostId, { t: "ai-error", message: `failed to transmit activations along chain to ${ai.next}` });
         }
-        if (d.pos % 8 === 0) aiStatus(`serving layers ${ai.range[0]}\u2013${ai.range[1] - 1} — pos ${d.pos}`);
+        if (d.pos % 8 === 0) aiStatus(`serving ${formatLayerRange(ai.range, false)} — pos ${d.pos}`);
       } catch (err) {
         console.error("Worker ai-hidden error:", err);
         if (ai.hostId) sendTo(ai.hostId, { t: "ai-error", message: `worker layer run failed: ${err.message}` });
@@ -2136,7 +2243,7 @@ async function aiOnData(from, d) {
       $("ai-row").style.display = "flex";
       renderWelcomePrompts();
       $("ai-empty").style.display = "";
-      aiStatus(`cluster online · serving layers ${ai.range ? ai.range[0] + "–" + (ai.range[1] - 1) : ""}`);
+      aiStatus(`cluster online · serving ${formatLayerRange(ai.range, ai.role === "host")}`);
       mascot("Cluster online! Type a question, the whole room answers.");
       break;
     case "ai-ask":
