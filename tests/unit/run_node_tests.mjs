@@ -443,4 +443,78 @@ await test("fallbackmode: throws helpful error if GROQ_API_KEY is missing", asyn
   assert(threw, "completeGroqChat should throw when API key is missing");
 });
 
+// Groq client & Model Mapping tests
+import { GROQ_MODEL_MAP, getGroqModelId } from "../../room/models.js";
+import { formatGroqError, streamGroqChat } from "../../room/groq-client.js";
+import groqProxyHandler from "../../api/groq.js";
+
+await test("groq: GROQ_MODEL_MAP contains all 5 required model mappings", () => {
+  assert(GROQ_MODEL_MAP["qwen3.8-27b"] === "qwen/qwen3-32b", "Qwen 3.8 27B should map to qwen/qwen3-32b");
+  assert(GROQ_MODEL_MAP["qwen2.5-coder-7b"] === "qwen/qwen3-32b", "Qwen2.5-Coder 7B should map to qwen/qwen3-32b");
+  assert(GROQ_MODEL_MAP["deepseek-r1-distill-qwen-14b"] === "deepseek-r1-distill-qwen-32b", "DeepSeek-R1 Distill Qwen 14B should map to deepseek-r1-distill-qwen-32b");
+  assert(GROQ_MODEL_MAP["qwq-32b"] === "qwen/qwen3-32b", "Qwen QwQ-32B should map to qwen/qwen3-32b");
+  assert(GROQ_MODEL_MAP["qwen3-4b"] === "llama-3.1-8b-instant", "Qwen3 4B should map to llama-3.1-8b-instant");
+  assert(GROQ_MODEL_MAP["qwen3-1.7b"] === "llama-3.1-8b-instant", "Qwen3 1.7B should map to llama-3.1-8b-instant");
+  assert(GROQ_MODEL_MAP["qwen3-0.6b"] === "llama-3.1-8b-instant", "Qwen3 0.6B should map to llama-3.1-8b-instant");
+
+  assert(getGroqModelId("qwen3.8-27b") === "qwen/qwen3-32b");
+  assert(getGroqModelId("deepseek-r1-distill-qwen-14b") === "deepseek-r1-distill-qwen-32b");
+});
+
+await test("groq: formatGroqError provides descriptive messages for 401, 404, 429", () => {
+  const err401 = formatGroqError(401, { error: { message: "Invalid API Key" } }, "qwen3-32b");
+  assert(err401.includes("Invalid Groq API Key (401)") && err401.includes("GROQ_API_KEY in .env"), "401 should mention invalid API key and .env");
+
+  const err404 = formatGroqError(404, { error: { message: "Model not found" } }, "qwen/qwen3-32b");
+  assert(err404.includes("Model \"qwen/qwen3-32b\" not found on Groq (404)"), "404 should name model and 404 status");
+
+  const err429 = formatGroqError(429, { error: { message: "Rate limit reached" } }, "qwen/qwen3-32b");
+  assert(err429.includes("Groq rate limit exceeded (429)"), "429 should identify rate limit");
+});
+
+await test("groq proxy: api/groq.js rejects GET requests with 405", async () => {
+  const req = new Request("http://localhost:8080/api/groq", { method: "GET" });
+  const res = await groqProxyHandler(req);
+  assert(res.status === 405, `Expected 405, got ${res.status}`);
+});
+
+await test("groq proxy: api/groq.js handles OPTIONS with 204", async () => {
+  const req = new Request("http://localhost:8080/api/groq", { method: "OPTIONS" });
+  const res = await groqProxyHandler(req);
+  assert(res.status === 204, `Expected 204, got ${res.status}`);
+});
+
+await test("groq proxy: api/groq.js rejects missing model with 400", async () => {
+  const req = new Request("http://localhost:8080/api/groq", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] })
+  });
+  const res = await groqProxyHandler(req);
+  assert(res.status === 400, `Expected 400 for missing model, got ${res.status}`);
+});
+
+await test("groq client: streamGroqChat handles non-JSON and HTML error responses without body stream already read", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => {
+      return new Response("<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body>Bad Gateway</body></html>", {
+        status: 502,
+        headers: { "Content-Type": "text/html" }
+      });
+    };
+    let threw = false;
+    try {
+      for await (const _ of streamGroqChat({ model: "test-model", prompt: "hi" })) {}
+    } catch (err) {
+      threw = true;
+      assert(!err.message.includes("body stream already read"), `Should not fail with stream read error: ${err.message}`);
+      assert(err.message.includes("502") || err.message.includes("Bad Gateway"), `Expected 502 error message: ${err.message}`);
+    }
+    assert(threw, "streamGroqChat should throw formatted error on 502");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 console.log(`\nAll ${passed} tests passed successfully!`);

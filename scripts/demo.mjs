@@ -77,8 +77,8 @@ async function startServers() {
   const httpRunning = await isPortInUse(HTTP_PORT);
   let httpProcess = null;
   if (!httpRunning) {
-    console.log(`[Demo] Starting Static Server on http://localhost:${HTTP_PORT}...`);
-    httpProcess = spawn("npx", ["-y", "serve", "-l", String(HTTP_PORT), "."], {
+    console.log(`[Demo] Starting Web & Groq Proxy Server on http://localhost:${HTTP_PORT}...`);
+    httpProcess = spawn("node", [path.join(ROOT, "scripts", "server.mjs"), "--port", String(HTTP_PORT)], {
       cwd: ROOT,
       shell: true,
       stdio: ["ignore", "pipe", "pipe"],

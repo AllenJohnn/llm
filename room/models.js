@@ -13,6 +13,24 @@ export const NEED_GB = {
   "smollm-135m": 0.6,
 };
 
+// Mapping from room model keys to Groq-hosted model IDs
+export const GROQ_MODEL_MAP = {
+  "qwen3.8-27b": "qwen/qwen3-32b",
+  "qwen2.5-coder-7b": "qwen/qwen3-32b",
+  "qwen2.5-coder-1.5b": "qwen/qwen3-32b",
+  "deepseek-r1-distill-qwen-14b": "deepseek-r1-distill-qwen-32b",
+  "qwq-32b": "qwen/qwen3-32b",
+  "qwen3-4b": "llama-3.1-8b-instant",
+  "qwen3-1.7b": "llama-3.1-8b-instant",
+  "qwen3-0.6b": "llama-3.1-8b-instant",
+  "phi-4-mini": "llama-3.1-8b-instant",
+  "smollm-135m": "llama-3.1-8b-instant",
+};
+
+export function getGroqModelId(modelKey) {
+  return GROQ_MODEL_MAP[modelKey] || modelKey || "qwen/qwen3-32b";
+}
+
 export const MODELS = {
   "qwen3-0.6b": { label: "Qwen3 0.6B · Q8", kind: "gguf", thinking: true,
     gguf: "https://hf-mirror.com/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf",

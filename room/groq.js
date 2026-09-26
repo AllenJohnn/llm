@@ -1,11 +1,20 @@
-// Groq API integration for fallback mode
-// Model: Qwen 27B (Groq model identifier: qwen/qwen3.8-27b)
+// Groq API integration for SwarmLLM
+// Model: Qwen 27B and mapped swarm models
+import {
+  GROQ_PROXY_URL,
+  GROQ_DIRECT_URL,
+  formatGroqError,
+  parseGroqSSEChunk,
+  streamGroqChat as clientStreamGroqChat,
+  completeGroqChat as clientCompleteGroqChat,
+} from "./groq-client.js";
 
-try {
-  if (typeof process !== "undefined" && typeof process.loadEnvFile === "function") {
-    process.loadEnvFile();
-  }
-} catch {}
+export {
+  GROQ_PROXY_URL,
+  GROQ_DIRECT_URL,
+  formatGroqError,
+  parseGroqSSEChunk,
+};
 
 export const GROQ_QWEN_27B_MODEL = "qwen/qwen3.8-27b";
 export const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -62,7 +71,6 @@ export async function loadBrowserEnv() {
 
   const envData = {};
 
-  // 1. Try env.json
   try {
     const res = await fetch("/env.json?t=" + Date.now());
     if (res.ok) {
@@ -71,222 +79,56 @@ export async function loadBrowserEnv() {
     }
   } catch {}
 
-  // 2. Try .env
-  try {
-    const res = await fetch("/.env?t=" + Date.now());
-    if (res.ok) {
-      const text = await res.text();
-      for (const line of text.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith("#")) continue;
-        const eqIdx = trimmed.indexOf("=");
-        if (eqIdx !== -1) {
-          const k = trimmed.slice(0, eqIdx).trim();
-          let v = trimmed.slice(eqIdx + 1).trim();
-          if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
-            v = v.slice(1, -1);
-          }
-          if (v === "true") v = true;
-          else if (v === "false") v = false;
-          if (envData[k] === undefined) {
-            envData[k] = v;
-          }
-        }
-      }
-    }
-  } catch {}
-
-  if (envData.GROQ_API_KEY) {
-    setGroqApiKey(envData.GROQ_API_KEY);
-  }
-
-  if (envData.FALLBACKMODE === true || envData.FALLBACKMODE === "true" || envData.FALLBACKMODE === "1") {
-    window.fallbackmode = true;
-    try { localStorage.setItem("swarm_fallbackmode", "true"); } catch {}
-    if (typeof window.toggleFallbackMode === "function") {
-      window.toggleFallbackMode(true);
-    }
-  }
-
   return envData;
 }
 
-// Auto-trigger in browser environment
 if (typeof window !== "undefined") {
   loadBrowserEnv().catch(() => {});
 }
 
 /**
- * Parses an SSE text chunk and extracts token deltas.
+ * Streaming chat wrapper supporting both proxy and direct Groq endpoint.
  */
-export function parseGroqSSEChunk(chunk, onToken) {
-  let textExtracted = "";
-  let isDone = false;
-  const lines = chunk.split("\n");
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith(":")) continue; // ignore keep-alives and empty lines
-    if (trimmed === "data: [DONE]") {
-      isDone = true;
-      continue;
+export async function streamGroqChat(opts) {
+  let key = opts.apiKey;
+  if (key === undefined) {
+    // If running in browser and hitting proxy, apiKey is not required from browser
+    if (typeof window !== "undefined" && !opts.endpoint) {
+      key = undefined;
+    } else {
+      key = getGroqApiKey();
     }
-    if (trimmed.startsWith("data: ")) {
-      try {
-        const payload = JSON.parse(trimmed.slice(6));
-        const delta = payload.choices?.[0]?.delta?.content || "";
-        if (delta) {
-          textExtracted += delta;
-          if (onToken) onToken(delta);
-        }
-      } catch {
-        // partial json chunk, will be handled by stream buffer
-      }
+  }
+  if (opts.endpoint === GROQ_DIRECT_URL || (!opts.endpoint && typeof window === "undefined" && opts.apiKey !== undefined)) {
+    if (!opts.apiKey) {
+      throw new Error("Groq API key required. Please provide a key starting with 'gsk_'.");
     }
   }
 
-  return { text: textExtracted, isDone };
+  let full = "";
+  for await (const piece of clientStreamGroqChat({
+    ...opts,
+    apiKey: key,
+    model: opts.model || GROQ_QWEN_27B_MODEL,
+    onToken: (tok, currentFull) => {
+      full = currentFull;
+      if (opts.onToken) opts.onToken(tok, currentFull);
+    },
+  })) {
+    // collected
+  }
+  return full;
 }
 
 /**
- * Streams chat completion using the Groq API with Qwen 27B model.
+ * Non-streaming chat wrapper.
  */
-export async function streamGroqChat({
-  prompt,
-  messages,
-  apiKey,
-  model = GROQ_QWEN_27B_MODEL,
-  onToken,
-  signal,
-  temperature = 0.6,
-  max_tokens = 2048,
-}) {
-  const key = (apiKey !== undefined ? apiKey : getGroqApiKey()).trim();
-  if (!key) {
+export async function completeGroqChat(opts) {
+  if (opts.apiKey !== undefined && !opts.apiKey) {
     throw new Error("Groq API key required. Please provide a key starting with 'gsk_'.");
   }
-
-  const msgs = messages || [{ role: "user", content: prompt }];
-  const response = await fetch(GROQ_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${key}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: msgs,
-      stream: true,
-      temperature,
-      max_tokens,
-    }),
-    signal,
+  return clientCompleteGroqChat({
+    ...opts,
+    model: opts.model || GROQ_QWEN_27B_MODEL,
   });
-
-  if (!response.ok) {
-    let errDetail = "";
-    try {
-      const errJson = await response.json();
-      errDetail = errJson.error?.message || JSON.stringify(errJson);
-    } catch {
-      errDetail = await response.text();
-    }
-    throw new Error(`Groq API returned HTTP ${response.status}: ${errDetail}`);
-  }
-
-  if (!response.body) {
-    throw new Error("ReadableStream not supported on this fetch response body.");
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  let buffer = "";
-  let fullText = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop(); // preserve last incomplete line for next iteration
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith(":")) continue;
-      if (trimmed === "data: [DONE]") return fullText;
-      if (trimmed.startsWith("data: ")) {
-        try {
-          const parsed = JSON.parse(trimmed.slice(6));
-          const delta = parsed.choices?.[0]?.delta?.content;
-          if (delta) {
-            fullText += delta;
-            if (onToken) onToken(delta, fullText);
-          }
-        } catch {
-          // ignore corrupted/partial chunks
-        }
-      }
-    }
-  }
-
-  if (buffer.trim().startsWith("data: ")) {
-    try {
-      const parsed = JSON.parse(buffer.trim().slice(6));
-      const delta = parsed.choices?.[0]?.delta?.content;
-      if (delta) {
-        fullText += delta;
-        if (onToken) onToken(delta, fullText);
-      }
-    } catch {}
-  }
-
-  return fullText;
-}
-
-/**
- * Executes a non-streaming chat completion request to the Groq API.
- */
-export async function completeGroqChat({
-  prompt,
-  messages,
-  apiKey,
-  model = GROQ_QWEN_27B_MODEL,
-  temperature = 0.6,
-  max_tokens = 2048,
-}) {
-  const key = (apiKey !== undefined ? apiKey : getGroqApiKey()).trim();
-  if (!key) {
-    throw new Error("Groq API key required. Please provide a key starting with 'gsk_'.");
-  }
-
-  const msgs = messages || [{ role: "user", content: prompt }];
-  const response = await fetch(GROQ_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${key}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: msgs,
-      stream: false,
-      temperature,
-      max_tokens,
-    }),
-  });
-
-  if (!response.ok) {
-    let errDetail = "";
-    try {
-      const errJson = await response.json();
-      errDetail = errJson.error?.message || JSON.stringify(errJson);
-    } catch {
-      errDetail = await response.text();
-    }
-    throw new Error(`Groq API returned HTTP ${response.status}: ${errDetail}`);
-  }
-
-  const json = await response.json();
-  return json.choices?.[0]?.message?.content || "";
 }
