@@ -4,6 +4,7 @@ import { chatRecipients, VISIBILITY } from "../../room/visibility.js";
 import { MODELS, NEED_GB, LOCAL_CANDIDATES, detectLocalModel } from "../../room/models.js";
 import { pledgeOf, calculateClusterPledge, formatLayerRange, allocateLayers } from "../../room/allocation.js";
 import { WGSL, coopWGSL } from "../../engine/engine.js";
+import { PerfSidebar, perfSidebar } from "../../room/perf-sidebar.js";
 
 const assert = (cond, msg) => { if (!cond) throw new Error(msg || "assertion failed"); };
 const eq = (a, b, m) => {
@@ -515,6 +516,139 @@ await test("groq client: streamGroqChat handles non-JSON and HTML error response
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+await test("perf-sidebar: scalability factors are strictly in increasing order", () => {
+  const ps = new PerfSidebar();
+  assert(ps.scalingFactors.length >= 3, "Expected at least 3 scaling benchmark points");
+  for (let i = 1; i < ps.scalingFactors.length; i++) {
+    const prev = ps.scalingFactors[i - 1];
+    const curr = ps.scalingFactors[i];
+    assert(curr.nodes > prev.nodes, `Nodes must strictly increase: ${curr.nodes} <= ${prev.nodes}`);
+    assert(curr.mult > prev.mult, `Multiplier must strictly increase: ${curr.mult} <= ${prev.mult}`);
+  }
+});
+
+await test("perf-sidebar: generation life-cycle updates metrics and session aggregates", () => {
+  const ps = new PerfSidebar();
+  ps.onGenStart({ model: "Qwen 3.8 27B" });
+  assert(ps.isStreaming === true, "isStreaming should be true on gen start");
+  assert(ps.currentModel === "Qwen 3.8 27B", "currentModel should match start argument");
+
+  ps.onToken("Hello", 1);
+  ps.onToken(" world", 2);
+  assert(ps.tokenCount === 2, "tokenCount should be 2");
+  assert(ps.streamPoints.length === 2, "streamPoints should have recorded 2 tokens");
+
+  ps.onGenDone({ totalTokens: 2, totalSecs: 0.1, stats: "2 tok · 20.0 tok/s" });
+  assert(ps.isStreaming === false, "isStreaming should be false on gen done");
+  assert(ps.sessionTokens === 2, "sessionTokens should aggregate");
+  assert(ps.promptCount === 1, "promptCount should increment");
+});
+
+await test("perf-sidebar: setClusterSize updates cluster state", () => {
+  const ps = new PerfSidebar();
+  ps.setClusterSize(3);
+  assert(ps.clusterSize === 3, "clusterSize should be 3");
+  ps.setClusterSize(0);
+  assert(ps.clusterSize === 1, "clusterSize should clamp to at least 1");
+});
+
+await test("perf-sidebar: setDevices registers multiple devices with distinct colors and pipeline stages", () => {
+  const ps = new PerfSidebar();
+  ps.setDevices([
+    { id: "self", name: "you", self: true, layers: "0-13+embed" },
+    { id: "peer-1", name: "host-58", self: false, layers: "14-27", rtt: 18 },
+    { id: "peer-2", name: "peer-2J", self: false, rtt: 35 }
+  ]);
+  assert(ps.clusterSize === 3, "clusterSize should be 3");
+  assert(ps.devices.length === 3, "devices length should be 3");
+  
+  // Verify distinct colors
+  const colors = ps.devices.map(d => d.color);
+  const uniqueColors = new Set(colors);
+  assert(uniqueColors.size === 3, "Each device in the grid must receive a distinct color");
+
+  // Verify pipeline stages
+  assert(ps.devices[0].stage === "0-13+embed", "Host should have its assigned layer range");
+  assert(ps.devices[1].stage === "14-27", "Peer 1 should have its assigned layer range");
+  assert(ps.devices[2].stage === "Stage 3/3", "Peer 2 without explicit layers should have fallback stage index");
+});
+
+await test("perf-sidebar: multi-device grid tracks individual device tokens and velocities", () => {
+  const ps = new PerfSidebar();
+  ps.setDevices([
+    { id: "self", name: "you", self: true },
+    { id: "peer-1", name: "host-58", self: false, rtt: 15 }
+  ]);
+
+  ps.onGenStart({ model: "Qwen2.5 Coder 7B" });
+  assert(ps.isStreaming === true, "Stream should be active");
+  assert(ps.devices[0].tokens === 0, "Device 0 initial tokens should be 0");
+  assert(ps.devices[1].tokens === 0, "Device 1 initial tokens should be 0");
+
+  // Stream 5 tokens
+  for (let i = 1; i <= 5; i++) {
+    ps.onToken(`tok${i}`, i);
+  }
+
+  assert(ps.tokenCount === 5, "Total cluster tokens should be 5");
+  assert(ps.devices[0].streamPoints.length === 5, "Device 0 should have streamPoints recorded");
+  assert(ps.devices[1].streamPoints.length === 5, "Device 1 should have streamPoints recorded");
+  assert(ps.devices[0].tokens > 0, "Device 0 should have processed tokens");
+  assert(ps.devices[1].tokens > 0, "Device 1 should have processed tokens");
+
+  ps.onGenDone({ totalTokens: 5, totalSecs: 0.1 });
+  assert(ps.devices[0].tokens === 5, "Device 0 should finalize with 5 tokens");
+  assert(ps.devices[1].tokens === 5, "Device 1 should finalize with 5 tokens");
+  assert(ps.deviceSessionTotals.get("self") === 5, "Session totals for self should be 5");
+  assert(ps.deviceSessionTotals.get("peer-1") === 5, "Session totals for peer-1 should be 5");
+});
+
+await test("perf-sidebar: renderLiveChart and renderScalingChart draw multi-device curves without error", () => {
+  const ps = new PerfSidebar();
+  ps.setDevices([
+    { id: "self", name: "you", self: true },
+    { id: "peer-1", name: "host-58", self: false }
+  ]);
+
+  // Mock canvas and 2D context
+  const createMockCtx = () => {
+    const ops = [];
+    return {
+      clearRect: (...args) => ops.push(["clearRect", args]),
+      beginPath: () => ops.push(["beginPath"]),
+      moveTo: (x, y) => ops.push(["moveTo", x, y]),
+      lineTo: (x, y) => ops.push(["lineTo", x, y]),
+      quadraticCurveTo: (cx, cy, x, y) => ops.push(["quadraticCurveTo", cx, cy, x, y]),
+      stroke: () => ops.push(["stroke"]),
+      fill: () => ops.push(["fill"]),
+      arc: (x, y, r) => ops.push(["arc", x, y, r]),
+      fillText: (t, x, y) => ops.push(["fillText", t, x, y]),
+      save: () => ops.push(["save"]),
+      restore: () => ops.push(["restore"]),
+      closePath: () => ops.push(["closePath"]),
+      setLineDash: (d) => ops.push(["setLineDash", d]),
+      createLinearGradient: () => ({ addColorStop: () => {} }),
+      _ops: ops,
+    };
+  };
+
+  ps.liveCanvas = { width: 600, height: 250 };
+  ps.liveCtx = createMockCtx();
+  ps.scalingCanvas = { width: 600, height: 300 };
+  ps.scalingCtx = createMockCtx();
+
+  // Populate stream data
+  ps.onGenStart({ model: "Qwen 3 0.6B" });
+  for (let i = 1; i <= 4; i++) ps.onToken(`t${i}`, i);
+
+  // Render both charts
+  ps.renderLiveChart();
+  ps.renderScalingChart();
+
+  assert(ps.liveCtx._ops.length > 10, "Live canvas should have drawn grid and multi-device curves");
+  assert(ps.scalingCtx._ops.length > 10, "Scaling canvas should have drawn bars and efficiency curve");
 });
 
 console.log(`\nAll ${passed} tests passed successfully!`);

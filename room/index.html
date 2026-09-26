@@ -951,17 +951,17 @@ window.swarmStart = function(create) {
         <option value="qwen3.8-27b">Qwen 3.8 27B · Q4</option>
         <option value="smollm-135m">SmolLM 135M · bf16 (Fast Test · 270 MB)</option>
       </select>
-      <div class="sidebar-fallback-card" id="sidebar-fallback-card" title="Toggle Groq Cloud API Fallback Mode (Direct Qwen 27B, 0 GB download)">
+      <div class="sidebar-fallback-card" id="sidebar-fallback-card" title="Toggle Groq Cloud API Mode (0 GB download, instant responses via Groq)">
         <div class="sfc-header">
           <div class="sfc-title-row">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="sfc-icon"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-            <span>Fallback Mode</span>
+            <span>Groq Mode</span>
           </div>
-          <button type="button" class="sfc-toggle" id="sidebar-fallback-toggle" aria-label="Toggle Fallback Mode">
+          <button type="button" class="sfc-toggle" id="sidebar-fallback-toggle" aria-label="Toggle Groq Mode">
             <span class="sfc-toggle-thumb"></span>
           </button>
         </div>
-        <div class="sfc-desc" id="sfc-desc">Groq API (Qwen 27B) · 0 GB download</div>
+        <div class="sfc-desc" id="sfc-desc">Groq API · 0 GB download · instant</div>
       </div>
       <div id="ai-need">
         <div id="need-bar"><div id="need-fill"></div></div>
@@ -1014,9 +1014,9 @@ window.swarmStart = function(create) {
                 <span>Deep Think</span>
               </button>
             </div>
-            <button type="button" class="fallback-mode-btn" id="mode-fallback" title="Fallback Mode: If enabled, uses Groq API with Qwen 27B model for instant responses">
+            <button type="button" class="fallback-mode-btn" id="mode-fallback" title="Toggle Groq Mode: When enabled, uses Groq API for instant responses (0 GB download). When disabled, uses local WebGPU swarm.">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-              <span class="fallback-label">Groq 27B</span>
+              <span class="fallback-label">Groq</span>
             </button>
             <div class="sender-hint"><span class="kbd-hint">↵ Send</span><span class="kbd-hint">⇧↵ New line</span></div>
           </div>
@@ -1087,7 +1087,8 @@ window.swarmStart = function(create) {
       ['/room/models.js', 'room/models.js'],
       ['/room/transport.js', 'room/transport.js'],
       ['/room/groq.js', 'room/groq.js'],
-      ['/room/groq-client.js', 'room/groq-client.js']
+      ['/room/groq-client.js', 'room/groq-client.js'],
+      ['/room/perf-sidebar.js', 'room/perf-sidebar.js']
     ];
 
     for (const [url, name] of subs) {

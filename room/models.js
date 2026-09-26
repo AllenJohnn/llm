@@ -91,7 +91,7 @@ export const MIN_ROOM = 32;    // a prompt must leave at least this many tokens 
 // Local model candidates for bypassing downloads during testing.
 // Place downloaded .gguf or .safetensors files in ./models/ to serve directly from local disk.
 export const LOCAL_CANDIDATES = {
-  "qwen3-0.6b": ["/models/qwen3-0.6b.gguf", "/models/Qwen3-0.6B-Q8_0.gguf", "/models/qwen/model.gguf"],
+  "qwen3-0.6b": ["/models/qwen3-0.6b.gguf", "/models/Qwen3-0.6B-Q8_0.gguf"],
   "qwen3-1.7b": ["/models/qwen3-1.7b.gguf", "/models/Qwen3-1.7B-Q8_0.gguf", "/models/qwen17/model.gguf"],
   "qwen3-4b": ["/models/qwen3-4b.gguf", "/models/Qwen3-4B-Q8_0.gguf", "/models/qwen4/model.gguf"],
   "qwen2.5-coder-1.5b": ["/models/qwen2.5-coder-1.5b-instruct-q4_0.gguf", "/models/Qwen2.5-Coder-1.5B-Instruct-Q4_0.gguf"],
