@@ -14,6 +14,7 @@
   "scripts": {
     "test": "deno test --allow-read tests/unit",
     "test:node": "node tests/unit/run_node_tests.mjs",
+    "test:groq": "node tests/test_mapped_models.mjs",
     "check": "deno check engine/*.js && node --check tests/*.js benchmarks/*.js",
     "test:gpu": "bash tests/run.sh quick",
     "test:q38": "bash tests/run.sh q38",

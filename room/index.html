@@ -313,7 +313,8 @@ window.swarmStart = function(create) {
   #ai-need { width: 100%; display: flex; flex-direction: column; gap: 6px; }
   /* panel states: pick -> loading -> online */
   #ai-panel.loading #ai-model, #ai-panel.loading #ai-start, #ai-panel.loading #ai-need,
-  #ai-panel.online #ai-model, #ai-panel.online #ai-start, #ai-panel.online #ai-need { display: none; }
+  #ai-panel.online:not(.groq-mode) #ai-model, #ai-panel.online #ai-start, #ai-panel.online #ai-need { display: none; }
+  #ai-panel.groq-mode #ai-model { display: block !important; }
   #need-bar { height: 6px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
   #need-fill { height: 100%; width: 0%; background: var(--muted); border-radius: 4px; transition: width 0.9s cubic-bezier(0.2,0.8,0.2,1), background 0.4s; }
   #ai-need.ok #need-fill { background: var(--accent); }
@@ -932,7 +933,10 @@ window.swarmStart = function(create) {
     <div class="side-k" id="devices-k">DEVICES</div>
     <div id="peers"></div>
     <div id="ai-panel">
-      <div class="side-k">MODEL</div>
+      <div class="side-k" style="display:flex;align-items:center;justify-content:space-between;width:100%;">
+        <span>MODEL</span>
+        <span class="model-groq-badge" id="model-groq-badge" style="font-size:10px; font-weight:600; text-transform:none; color:var(--accent, #10b981); background:rgba(16,185,129,0.12); padding:2px 7px; border-radius:4px; letter-spacing:0.02em;">via Groq</span>
+      </div>
       <div id="ai-head">
       <span id="ai-title">SWARM MODEL</span>
       <select id="ai-model">
@@ -944,7 +948,7 @@ window.swarmStart = function(create) {
         <option value="deepseek-r1-distill-qwen-14b">DeepSeek-R1 Distill Qwen 14B · Q4 (Reasoning)</option>
         <option value="qwq-32b">Qwen QwQ 32B · Q4 (Deep Reasoning)</option>
         <option value="phi-4-mini">Phi-4 mini · Q4 (coding &amp; reasoning)</option>
-        <option value="qwen3.8-27b">Qwen 3.8 27B · Q4 (Groq Fallback API)</option>
+        <option value="qwen3.8-27b">Qwen 3.8 27B · Q4</option>
         <option value="smollm-135m">SmolLM 135M · bf16 (Fast Test · 270 MB)</option>
       </select>
       <div class="sidebar-fallback-card" id="sidebar-fallback-card" title="Toggle Groq Cloud API Fallback Mode (Direct Qwen 27B, 0 GB download)">
@@ -1082,7 +1086,8 @@ window.swarmStart = function(create) {
       ['/room/visibility.js', 'room/visibility.js'],
       ['/room/models.js', 'room/models.js'],
       ['/room/transport.js', 'room/transport.js'],
-      ['/room/groq.js', 'room/groq.js']
+      ['/room/groq.js', 'room/groq.js'],
+      ['/room/groq-client.js', 'room/groq-client.js']
     ];
 
     for (const [url, name] of subs) {
