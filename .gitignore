@@ -14,4 +14,9 @@ node_modules/
 local-server/
 models/
 presentation/
-.claude/
+# environment & secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+env.json

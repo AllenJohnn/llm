@@ -13,6 +13,31 @@ import { chatRecipients } from "./room/visibility.js";
 import { MODELS, NEED_GB, MAX_SEQ, MAX_NEW, MIN_ROOM, detectLocalModel } from "./room/models.js";
 import { makeLink, attachWire, wireReady, sendFrame, resetLink } from "./room/transport.js";
 import { pledgeOf, calculateClusterPledge, formatLayerRange, allocateLayers } from "./room/allocation.js";
+import { GROQ_QWEN_27B_MODEL, streamGroqChat, getGroqApiKey, setGroqApiKey, loadBrowserEnv } from "./room/groq.js";
+
+// Fallback mode: if enabled, use Groq API with Qwen 27B model (qwen/qwen3.8-27b)
+var fallbackmode = (typeof window !== "undefined" && (
+  window.fallbackmode === true ||
+  new URLSearchParams(window.location?.search).get("fallbackmode") === "true" ||
+  new URLSearchParams(window.location?.search).get("fallbackmode") === "1" ||
+  localStorage.getItem("swarm_fallbackmode") === "true"
+)) || (typeof process !== "undefined" && (
+  process.env?.FALLBACKMODE === "true" || process.env?.FALLBACKMODE === "1"
+)) || false;
+if (typeof window !== "undefined") {
+  window.fallbackmode = fallbackmode;
+  loadBrowserEnv().then((env) => {
+    if (env.FALLBACKMODE === true || env.FALLBACKMODE === "true" || env.FALLBACKMODE === "1") {
+      fallbackmode = true;
+      window.fallbackmode = true;
+      if (typeof updateFallbackModeUI === "function") updateFallbackModeUI(true);
+      if (typeof updateCluster === "function") updateCluster();
+    }
+    if (env.GROQ_API_KEY) {
+      setGroqApiKey(env.GROQ_API_KEY);
+    }
+  }).catch(() => {});
+}
 
 // Hidden-state transport (room/transport.js). ?wire=off falls back to PeerJS messages;
 // ?wire=slice uses one sliced channel; ?wire=stripeN spreads slices over N peer connections.
@@ -330,18 +355,44 @@ function updateTopbarDownload(show, done = 0, total = 0, note = "") {
 
 let wasReady = false;
 function updateNeed(pledged) {
-  const need = NEED_GB[$("ai-model").value] || 1;
+  const model = $("ai-model")?.value;
+  const isFallback = Boolean(
+    fallbackmode ||
+    (typeof window !== "undefined" && window.fallbackmode) ||
+    (model === "qwen3.8-27b" && (fallbackmode || Boolean(getGroqApiKey())))
+  );
+  if (isFallback) {
+    if ($("need-fill")) $("need-fill").style.width = "100%";
+    if ($("need-text")) $("need-text").textContent = "fallback mode active · Groq API (Qwen 27B) · no download required";
+    if ($("ai-need")) $("ai-need").classList.add("ok");
+    if ($("ai-start") && !ai.busy && !ai.engine) $("ai-start").disabled = false;
+    return;
+  }
+  const need = NEED_GB[$("ai-model")?.value] || 1;
   const ok = pledged >= need;
-  $("need-fill").style.width = Math.min(100, pledged / need * 100).toFixed(1) + "%";
-  $("need-text").textContent = ok
+  if ($("need-fill")) $("need-fill").style.width = Math.min(100, pledged / need * 100).toFixed(1) + "%";
+  if ($("need-text")) $("need-text").textContent = ok
     ? `needs ~${need} GB \u00b7 room gives ${pledged.toFixed(1)} GB \u00b7 ready`
     : `needs ~${need} GB \u00b7 room gives ${pledged.toFixed(1)} GB \u00b7 add ${(need - pledged).toFixed(1)} GB more`;
-  $("ai-need").classList.toggle("ok", ok);
-  if (!ai.busy && !ai.engine) $("ai-start").disabled = !ok;
-  if (ok && !wasReady) { $("ai-start").classList.remove("unlocked"); void $("ai-start").offsetWidth; $("ai-start").classList.add("unlocked"); }
+  if ($("ai-need")) $("ai-need").classList.toggle("ok", ok);
+  if ($("ai-start") && !ai.busy && !ai.engine) $("ai-start").disabled = !ok;
+  if (ok && !wasReady) {
+    $("ai-start")?.classList.remove("unlocked");
+    void $("ai-start")?.offsetWidth;
+    $("ai-start")?.classList.add("unlocked");
+  }
   wasReady = ok;
 }
-$("ai-model").addEventListener("change", () => updateCluster());
+$("ai-model").addEventListener("change", () => {
+  const model = $("ai-model").value;
+  if (model === "qwen3.8-27b") {
+    if (fallbackmode || getGroqApiKey()) {
+      if (!fallbackmode) toggleFallbackMode(true);
+      toast("⚡ Qwen 27B: Fallback Mode Active (Groq API, 0 GB download)");
+    }
+  }
+  updateCluster();
+});
 function updateCluster() {
   const all = [myMeta, ...[...members.values()].map(m => m.meta)];
   const gpus = all.filter(m => m && m.webgpu).length;
@@ -360,13 +411,31 @@ function enterRoom() {
   $("room-badge").textContent = roomCode;
   $("side-code").textContent = roomCode;
   $("side-code").addEventListener("click", copyRoomLink);
-  if (isHost) $("host-controls").hidden = false;
+  if (isHost) {
+    if ($("host-controls")) $("host-controls").hidden = false;
+    const splitBtn = $("split-demo-btn");
+    if (splitBtn) {
+      splitBtn.style.display = "block";
+      splitBtn.onclick = () => {
+        const signalParam = SIGNAL ? `&signal=${encodeURIComponent(SIGNAL)}` : "";
+        const url = `${location.origin}${location.pathname}?code=${roomCode}${signalParam}`;
+        window.open(url, "_blank");
+      };
+    }
+  }
   peerCard("self", myName, myMeta, true);
   updateCluster();
   log("swarm", `room ${roomCode} — share this code with your other devices`);
   $("ai-panel").style.display = "flex";
   aiStatus("");
   $("ai-empty").textContent = "pick a model and press start, from any device";
+  if (fallbackmode) {
+    $("ai-row").style.display = "flex";
+    $("ai-empty").style.display = "none";
+    $("ai-panel").classList.add("online");
+    aiStatus("fallback mode active · Groq API (Qwen 27B) · 0 GB download");
+    updateFallbackModeUI(true);
+  }
   const selfCard = document.querySelector(".peer-card.self");
   if (selfCard && myMeta.webgpu) {
     const row = document.createElement("div");
@@ -644,7 +713,7 @@ async function start(create) {
     let opened = false;
     const sigTimeout = setTimeout(() => {
       if (!opened) {
-        $("join-status").textContent = "could not reach signaling server (timed out) — check network or try again";
+        $("join-status").innerHTML = "Could not reach signaling server (timed out).<br>For offline or single-system demo, run <code>npm run signal</code> and <a href='?signal=localhost:9000' style='color:var(--accent); text-decoration:underline;'>switch to local PeerServer (:9000)</a>";
         $("create-btn").disabled = $("join-btn").disabled = false;
         try { peer?.destroy(); } catch {}
       }
@@ -790,7 +859,8 @@ $("join-btn").addEventListener("click", () => { keepAwake().catch(() => {}); sta
 $("code-input").addEventListener("keydown", (e) => { if (e.key === "Enter") start(false); });
 // the room code badge copies a join link; a page opened with ?code=ABCD has the code filled in
 function copyRoomLink() {
-  const url = `${location.origin}${location.pathname}?code=${roomCode}`;
+  const signalParam = SIGNAL ? `&signal=${encodeURIComponent(SIGNAL)}` : "";
+  const url = `${location.origin}${location.pathname}?code=${roomCode}${signalParam}`;
   if (!navigator.clipboard) { toast("room code: " + roomCode); return; }
   navigator.clipboard.writeText(url).then(() => toast("join link copied")).catch(() => { navigator.clipboard.writeText(roomCode); toast("room code copied"); });
 }
@@ -918,6 +988,10 @@ async function rangeFetch(url, lo, hi, noCache = false) {
   throw new Error(`rangeFetch failed for ${currentUrl} [${lo}-${hi}] after ${maxRetries + 1} attempts: ${lastErr?.message || lastErr}`);
 }
 async function fetchGGUFHeader(url, needTokenizer = true) {
+  if (fallbackmode || (url && url.includes("Qwen3.8-27B"))) {
+    console.warn("[FallbackMode] Bypassing fetchGGUFHeader for 27B model (using Groq Cloud API directly)");
+    return { meta: { "qwen35.block_count": 64, "qwen35.nextn_predict_layers": 0 }, tensors: {} };
+  }
   let size = 12 * 2 ** 20;
   for (;;) {
     const r = await rangeFetch(url, 0, size - 1);   // 206 from the network, 200 from the cache
@@ -1318,6 +1392,17 @@ function chatBotEnd(raw, stats, capped = false) {
 
 
 async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
+  const isFallback = Boolean(
+    fallbackmode ||
+    (typeof window !== "undefined" && window.fallbackmode) ||
+    modelKey === "qwen3.8-27b"
+  );
+  if (isFallback) {
+    console.warn(`[FallbackMode] Hard intercept: preventing aiLoadShard for ${modelKey}`);
+    aiLoading(false);
+    if ($("load-card")) $("load-card").classList.remove("on");
+    return;
+  }
   const M = MODELS[modelKey];
   ai.model = modelKey;
   aiLoading(true, `downloading ${formatLayerRange(range, hasEmbed)} of ${M.label.split("\u00b7")[0].trim()}`);
@@ -1519,7 +1604,12 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
 // ---- host ----
 function aiStartAnywhere() {
   const model = $("ai-model").value;
-  if (isHost) {
+  const isFallback = Boolean(
+    fallbackmode ||
+    (typeof window !== "undefined" && window.fallbackmode) ||
+    (model === "qwen3.8-27b" && (fallbackmode || Boolean(getGroqApiKey())))
+  );
+  if (isFallback || isHost) {
     aiStart(model);
     return;
   }
@@ -1538,6 +1628,38 @@ function aiStartAnywhere() {
 }
 async function aiStart(modelArg) {
   if (ai.engine || ai.busy) return;
+  const modelKey = (typeof modelArg === "string" ? modelArg : $("ai-model").value) || "qwen3.8-27b";
+  const isFallback = Boolean(
+    fallbackmode ||
+    (typeof window !== "undefined" && window.fallbackmode) ||
+    (modelKey === "qwen3.8-27b" && (fallbackmode || Boolean(getGroqApiKey())))
+  );
+
+  if (isFallback) {
+    // In fallback mode, NEVER download the 27B model (or any weights)
+    // Directly use Groq Cloud API with Qwen 27B
+    fallbackmode = true;
+    if (typeof window !== "undefined") window.fallbackmode = true;
+    updateFallbackModeUI(true);
+
+    ai.role = "host";
+    ai.model = modelKey;
+    ai.busy = false;
+    clearInterval(ai.progTimer);
+    aiLoading(false);
+    $("load-card").classList.remove("on");
+    $("ai-panel").classList.remove("loading");
+    $("ai-panel").classList.add("online");
+    $("ai-row").style.display = "flex";
+    $("ai-empty").style.display = "none";
+    renderWelcomePrompts();
+    aiStatus("ready · Groq Cloud (Qwen 27B) — no model download needed");
+    mascot("Fallback mode active! Streaming directly from Groq Qwen 27B without downloading the 16.5 GB model.");
+    toast("⚡ Fallback Mode: Bypassed 16 GB download — using Groq API directly");
+    broadcastAll({ t: "ai-ready-all", fallbackmode: true });
+    return;
+  }
+
   ai.busy = true;
   if (typeof modelArg === "string") $("ai-model").value = modelArg;
   $("ai-start").disabled = true;
@@ -1545,7 +1667,6 @@ async function aiStart(modelArg) {
   ai.readyPeers = new Set();
   try {
     ai.role = "host";
-    const modelKey = $("ai-model").value;
     ai.model = modelKey;
     await detectLocalModel(modelKey);
     const M = MODELS[modelKey];
@@ -1739,7 +1860,85 @@ function sendChat(msg, askerId) {
 async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
   const text = (textArg ?? $("ai-prompt").value).trim();
   const asker = who || myName;
-  if (!text || ai.busy === "gen" || !ai.engine) return;
+  const isFallback = Boolean(fallbackmode || (typeof window !== "undefined" && window.fallbackmode));
+  if (!text || ai.busy === "gen") return;
+  if (!isFallback && !ai.engine) return;
+
+  if (isFallback) {
+    ai.lastPrompt = continuation.originalPrompt || text;
+    ai.abortGen = false;
+    ai.busy = "gen";
+    $("ai-prompt").value = "";
+    $("ai-prompt").style.height = "auto";
+    setSendButtonState("stop");
+
+    if (!continuation.isContinuation) {
+      chatUser(asker, text);
+      chatBotStart();
+      sendChat({ t: "ai-genstart", name: asker, text }, askerId);
+    }
+    mascot("Routing prompt to Groq API (Qwen 27B model) via fallback mode…");
+    aiStatus("fallback mode: streaming from Groq API (Qwen 27B)…");
+
+    let apiKey = getGroqApiKey();
+    if (!apiKey && typeof window !== "undefined") {
+      apiKey = window.prompt("Fallback Mode is enabled! Please enter your Groq API key (starts with gsk_):");
+      if (apiKey) {
+        setGroqApiKey(apiKey);
+      }
+    }
+
+    const t0 = performance.now();
+    let reply = continuation.prefixReply || "";
+    let tokenCount = 0;
+    const controller = new AbortController();
+    ai.groqAbortController = controller;
+
+    try {
+      await streamGroqChat({
+        prompt: text,
+        apiKey,
+        model: GROQ_QWEN_27B_MODEL,
+        signal: controller.signal,
+        onToken: (token) => {
+          if (ai.abortGen) {
+            controller.abort();
+            return;
+          }
+          tokenCount++;
+          reply += token;
+          chatBotUpdate(reply);
+          sendChat({ t: "ai-token", text: token }, askerId);
+        },
+      });
+
+      const secs = (performance.now() - t0) / 1000;
+      const stats = `${tokenCount} tok · ${(tokenCount / (secs || 0.001)).toFixed(1)} tok/s · Groq Cloud (Qwen 27B Fallback)`;
+      chatBotEnd(reply, stats, false);
+      sendChat({ t: "ai-gendone", stats, capped: false }, askerId);
+      mascot("Done. Answered with Qwen 27B via Groq API.");
+      aiStatus(`ready — ${stats}`);
+    } catch (err) {
+      if (ai.abortGen) {
+        const stats = `${tokenCount} tok · stopped by user · Groq Qwen 27B`;
+        chatBotEnd(reply, stats, false);
+        sendChat({ t: "ai-gendone", stats, capped: false }, askerId);
+        aiStatus(`stopped — ${stats}`);
+      } else {
+        console.error("[FallbackMode] Groq API error:", err);
+        aiStatus("Groq error: " + err.message);
+        chatBotEnd(reply + "\n\n⚠ Groq Fallback Error: " + err.message, "");
+        sendChat({ t: "ai-gendone", stats: "failed: " + err.message }, askerId);
+      }
+    } finally {
+      ai.busy = false;
+      ai.abortGen = false;
+      ai.groqAbortController = null;
+      setSendButtonState("send");
+    }
+    return;
+  }
+
   try { ai.engine.reset?.(); } catch {}
   ai.pos = 0;
   for (const [, w] of ai.waiters) {
@@ -2056,6 +2255,22 @@ async function aiOnData(from, d) {
       aiStatus("syncing with the room\u2026");
       break;
     case "ai-load": {
+      const isFallback = Boolean(fallbackmode || (typeof window !== "undefined" && window.fallbackmode) || d.fallbackmode);
+      if (isFallback) {
+        if (MODELS[d.model]) $("ai-model").value = d.model;
+        ai.role = "worker";
+        ai.hostId = d.host;
+        aiLoading(false);
+        $("load-card").classList.remove("on");
+        $("ai-panel").classList.remove("loading");
+        $("ai-panel").classList.add("online");
+        $("ai-row").style.display = "flex";
+        $("ai-empty").style.display = "none";
+        renderWelcomePrompts();
+        aiStatus("ready · Groq Cloud (Qwen 27B) — no download needed");
+        sendTo(ai.hostId, { t: "ai-ready", from: peer.id });
+        break;
+      }
       if (MODELS[d.model]) $("ai-model").value = d.model;
       ai.role = "worker";
       ai.next = d.next;
@@ -2268,6 +2483,7 @@ $("cache-clear").addEventListener("click", async (ev) => {
 function aiSubmit() {
   if (ai.busy === "gen") {
     ai.abortGen = true;
+    ai.groqAbortController?.abort();
     aiStatus("stopping generation…");
     broadcastAll({ t: "ai-abort" });
     return;
@@ -2276,7 +2492,8 @@ function aiSubmit() {
   const text = promptEl.value.trim();
   if (!text) return;
   ai.lastPrompt = text;
-  if (ai.role === "host") { aiGenerate(); return; }
+  const isFallback = Boolean(fallbackmode || (typeof window !== "undefined" && window.fallbackmode));
+  if (isFallback || ai.role === "host") { aiGenerate(); return; }
   const hostId = ai.hostId;
   if (!conns.has(hostId)) { toast("not connected to the host"); return; }
   promptEl.value = "";
@@ -2332,8 +2549,96 @@ function setupThinkingModeToggle() {
 }
 setupThinkingModeToggle();
 
+function updateFallbackModeUI(enabled) {
+  const btn = $("mode-fallback");
+  if (btn) {
+    btn.classList.toggle("active", enabled);
+    const label = btn.querySelector(".fallback-label");
+    if (label) {
+      label.textContent = enabled ? "Groq 27B (On)" : "Groq 27B";
+    }
+  }
+
+  const sideCard = $("sidebar-fallback-card");
+  if (sideCard) {
+    sideCard.classList.toggle("active", enabled);
+  }
+  const sideToggle = $("sidebar-fallback-toggle");
+  if (sideToggle) {
+    sideToggle.classList.toggle("active", enabled);
+  }
+  const sfcDesc = $("sfc-desc");
+  if (sfcDesc) {
+    sfcDesc.textContent = enabled
+      ? "⚡ Active · Direct Qwen 27B (0 GB download)"
+      : "Groq API (Qwen 27B) · 0 GB download";
+  }
+}
+
+function toggleFallbackMode(forceState) {
+  fallbackmode = typeof forceState === "boolean" ? forceState : !fallbackmode;
+  if (typeof window !== "undefined") {
+    window.fallbackmode = fallbackmode;
+    try {
+      localStorage.setItem("swarm_fallbackmode", fallbackmode ? "true" : "false");
+    } catch {}
+  }
+  updateFallbackModeUI(fallbackmode);
+  if (fallbackmode) {
+    aiLoading(false);
+    if ($("load-card")) $("load-card").classList.remove("on");
+    if ($("ai-panel")) {
+      $("ai-panel").classList.remove("loading");
+      $("ai-panel").classList.add("online");
+    }
+    if ($("ai-row")) $("ai-row").style.display = "flex";
+    if ($("ai-empty")) $("ai-empty").style.display = "none";
+    if ($("ai-start")) $("ai-start").disabled = false;
+    updateNeed(0);
+    toast("⚡ Fallback Mode ENABLED: using Groq directly (no 27B model download)");
+    aiStatus("fallback mode active · Groq API (Qwen 27B) · 0 GB download needed");
+    mascot("Fallback Mode active! Prompt requests stream directly from Groq Qwen 27B without downloading the 16.5 GB model.");
+  } else {
+    if (!ai.engine) {
+      if ($("ai-panel")) $("ai-panel").classList.remove("online");
+    }
+    updateCluster();
+    toast("Fallback Mode DISABLED: using WebGPU Swarm");
+    aiStatus(ai.engine ? `cluster online · serving ${formatLayerRange(ai.range, ai.role === "host")}` : "split across every device in the room");
+    mascot("Swarm WebGPU mode active.");
+  }
+}
+
+function setupFallbackModeToggle() {
+  updateFallbackModeUI(fallbackmode);
+  const btn = $("mode-fallback");
+  if (btn) {
+    btn.addEventListener("click", () => toggleFallbackMode());
+  }
+  const sideCard = $("sidebar-fallback-card");
+  if (sideCard) {
+    sideCard.addEventListener("click", () => toggleFallbackMode());
+  }
+  const sideToggle = $("sidebar-fallback-toggle");
+  if (sideToggle) {
+    sideToggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleFallbackMode();
+    });
+  }
+  if (fallbackmode) {
+    if ($("ai-row")) $("ai-row").style.display = "flex";
+    if ($("ai-empty")) $("ai-empty").style.display = "none";
+  }
+}
+setupFallbackModeToggle();
+
 mascot("Hi! I'm Swarmy. Create a room, or type a friend's code to join one.");
 
+window.fallbackmode = fallbackmode;
+window.toggleFallbackMode = toggleFallbackMode;
+window.setGroqApiKey = setGroqApiKey;
+window.getGroqApiKey = getGroqApiKey;
 window.__roomStart = start;
 window.__roomLoaded = true;
-console.log("SwarmLLM room.js initialized successfully");
+console.log("SwarmLLM room.js initialized successfully (fallbackmode ready)");

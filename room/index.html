@@ -706,6 +706,76 @@ window.swarmStart = function(create) {
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
   }
   .think-mode-btn.active svg { color: var(--accent); }
+  .fallback-mode-btn {
+    border: 1px solid var(--border); background: var(--panel-2); padding: 3px 9px; border-radius: 8px;
+    font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+    display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+    transition: all 0.18s cubic-bezier(0.2, 0.8, 0.2, 1); user-select: none;
+  }
+  .fallback-mode-btn:hover { color: var(--text); border-color: var(--faint); }
+  .fallback-mode-btn.active {
+    background: #fdf2f8; color: #db2777; border-color: #f472b6; font-weight: 600;
+    box-shadow: 0 1px 4px rgba(219, 39, 119, 0.15);
+  }
+  .fallback-mode-btn.active svg { stroke: #db2777; color: #db2777; }
+
+  .sidebar-fallback-card {
+    display: flex; flex-direction: column; gap: 5px;
+    background: color-mix(in srgb, var(--panel-2) 80%, transparent);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px 12px; margin-top: 4px; margin-bottom: 4px;
+    cursor: pointer; transition: all 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+    user-select: none;
+  }
+  .sidebar-fallback-card:hover {
+    border-color: var(--faint);
+    background: var(--panel-2);
+  }
+  .sidebar-fallback-card.active {
+    background: color-mix(in srgb, #db2777 10%, var(--panel-2));
+    border-color: #f472b6;
+    box-shadow: 0 2px 8px rgba(219, 39, 119, 0.12);
+  }
+  .sfc-header {
+    display: flex; justify-content: space-between; align-items: center; width: 100%;
+  }
+  .sfc-title-row {
+    display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 11.5px;
+  }
+  .sfc-icon {
+    stroke: var(--muted); transition: all 0.2s ease;
+  }
+  .sidebar-fallback-card.active .sfc-icon {
+    stroke: #db2777; fill: rgba(219, 39, 119, 0.2);
+  }
+  .sidebar-fallback-card.active .sfc-title-row {
+    color: #db2777;
+  }
+  .sfc-toggle {
+    width: 36px; height: 20px; border-radius: 100px;
+    background: var(--border); border: none; cursor: pointer;
+    position: relative; padding: 2px; transition: background 0.25s ease;
+    display: inline-flex; align-items: center;
+  }
+  .sfc-toggle.active {
+    background: #db2777;
+  }
+  .sfc-toggle-thumb {
+    width: 16px; height: 16px; border-radius: 50%;
+    background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+    transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+    transform: translateX(0);
+  }
+  .sfc-toggle.active .sfc-toggle-thumb {
+    transform: translateX(16px);
+  }
+  .sfc-desc {
+    font-family: var(--mono); font-size: 10px; color: var(--muted);
+    line-height: 1.3;
+  }
+  .sidebar-fallback-card.active .sfc-desc {
+    color: var(--text); font-weight: 500;
+  }
   .sender-hint {
     display: flex; gap: 8px; font-family: var(--mono); font-size: 10.5px; color: var(--muted);
   }
@@ -845,12 +915,20 @@ window.swarmStart = function(create) {
     <button id="join-btn" type="button" onclick="window.swarmStart && window.swarmStart(false)">Join room</button>
   </div>
   <div id="join-pledge">give <button class="step" id="gb-minus" type="button" onclick="window.stepGB && window.stepGB(-1)">−</button><input id="join-gb" type="number" min="1" max="64" step="1" value="1" inputmode="numeric"><button class="step" id="gb-plus" type="button" onclick="window.stepGB && window.stepGB(1)">+</button> GB of memory</div>
+  <div id="join-hint" style="font-family:var(--mono); font-size:11px; color:var(--muted); margin-top:8px;">
+    Offline / Single-System Demo: <a href="?signal=localhost:9000" style="color:var(--accent); text-decoration:underline;">Local PeerServer (:9000)</a>
+  </div>
   <div id="join-status"></div>
 </div>
 
 <div id="room-screen">
   <aside id="side">
-    <div id="side-room"><div class="side-k">ROOM</div><div id="side-code" title="click to copy">----</div><div class="side-hint">share this code</div></div>
+    <div id="side-room">
+      <div class="side-k">ROOM</div>
+      <div id="side-code" title="click to copy">----</div>
+      <div class="side-hint">share this code</div>
+      <button id="split-demo-btn" type="button" style="display:none; font-family:var(--mono); font-size:11px; font-weight:500; padding:6px 10px; border-radius:8px; background:var(--accent); color:#fff; border:none; cursor:pointer; margin-top:6px;" title="Open a 2nd worker tab side-by-side to demonstrate cooperative inference">+ Split Demo Tab</button>
+    </div>
     <div class="side-k" id="devices-k">DEVICES</div>
     <div id="peers"></div>
     <div id="ai-panel">
@@ -866,9 +944,21 @@ window.swarmStart = function(create) {
         <option value="deepseek-r1-distill-qwen-14b">DeepSeek-R1 Distill Qwen 14B · Q4 (Reasoning)</option>
         <option value="qwq-32b">Qwen QwQ 32B · Q4 (Deep Reasoning)</option>
         <option value="phi-4-mini">Phi-4 mini · Q4 (coding &amp; reasoning)</option>
-        <option value="qwen3.8-27b">Qwen 3.8 27B · Q4</option>
+        <option value="qwen3.8-27b">Qwen 3.8 27B · Q4 (Groq Fallback API)</option>
         <option value="smollm-135m">SmolLM 135M · bf16 (Fast Test · 270 MB)</option>
       </select>
+      <div class="sidebar-fallback-card" id="sidebar-fallback-card" title="Toggle Groq Cloud API Fallback Mode (Direct Qwen 27B, 0 GB download)">
+        <div class="sfc-header">
+          <div class="sfc-title-row">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="sfc-icon"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            <span>Fallback Mode</span>
+          </div>
+          <button type="button" class="sfc-toggle" id="sidebar-fallback-toggle" aria-label="Toggle Fallback Mode">
+            <span class="sfc-toggle-thumb"></span>
+          </button>
+        </div>
+        <div class="sfc-desc" id="sfc-desc">Groq API (Qwen 27B) · 0 GB download</div>
+      </div>
       <div id="ai-need">
         <div id="need-bar"><div id="need-fill"></div></div>
         <div id="need-text">needs ~0.8 GB · room gives 0 GB</div>
@@ -920,6 +1010,10 @@ window.swarmStart = function(create) {
                 <span>Deep Think</span>
               </button>
             </div>
+            <button type="button" class="fallback-mode-btn" id="mode-fallback" title="Fallback Mode: If enabled, uses Groq API with Qwen 27B model for instant responses">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+              <span class="fallback-label">Groq 27B</span>
+            </button>
             <div class="sender-hint"><span class="kbd-hint">↵ Send</span><span class="kbd-hint">⇧↵ New line</span></div>
           </div>
           <button id="ai-send" class="primary sender-btn" title="Send prompt (Enter)">
@@ -987,7 +1081,8 @@ window.swarmStart = function(create) {
       ['/room/sampling.js', 'room/sampling.js'],
       ['/room/visibility.js', 'room/visibility.js'],
       ['/room/models.js', 'room/models.js'],
-      ['/room/transport.js', 'room/transport.js']
+      ['/room/transport.js', 'room/transport.js'],
+      ['/room/groq.js', 'room/groq.js']
     ];
 
     for (const [url, name] of subs) {

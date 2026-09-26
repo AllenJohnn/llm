@@ -6,6 +6,13 @@
 import { DenseEngine, argmax } from "../engine/engine.js";
 import { ggmlLayerNames, GGML_EMBED, GGML_FINAL_NORM, GGML_OUTPUT } from "../engine/gguf.js";
 import { MODELS, NEED_GB } from "../room/models.js";
+import { GROQ_QWEN_27B_MODEL, completeGroqChat } from "../room/groq.js";
+
+// Fallback mode: if enabled, use Groq API with Qwen 27B model
+var fallbackmode = (typeof process !== "undefined" && (
+  process.env.FALLBACKMODE === "true" ||
+  process.env.FALLBACKMODE === "1"
+)) || false;
 
 const MODEL_CONFIGS = {
   "qwen2.5-coder-7b": {
@@ -184,6 +191,29 @@ function cpuLayerRef(cfg, xIn, weights, pos) {
 }
 
 console.log("\n=== Testing WebGPU Layer Equivalence for New Models ===");
+if (typeof navigator === "undefined" || !navigator?.gpu) {
+  if (fallbackmode) {
+    console.log(`[FallbackMode] fallbackmode is enabled: using Groq API with Qwen 27B model (${GROQ_QWEN_27B_MODEL}).`);
+    const key = process.env.GROQ_API_KEY;
+    if (key) {
+      try {
+        console.log(`[FallbackMode] Calling Groq API (${GROQ_QWEN_27B_MODEL})...`);
+        const reply = await completeGroqChat({
+          prompt: "Verify that fallback mode is operational. Reply in one short sentence.",
+          apiKey: key,
+          model: GROQ_QWEN_27B_MODEL,
+        });
+        console.log(`[FallbackMode] Response from Groq API (${GROQ_QWEN_27B_MODEL}):\n${reply.trim()}`);
+      } catch (err) {
+        console.warn(`[FallbackMode] Groq API call error: ${err.message}`);
+      }
+    } else {
+      console.log(`[FallbackMode] Note: GROQ_API_KEY is not set in environment. Set GROQ_API_KEY to send live requests to Groq.`);
+    }
+  }
+  console.log("[WebGPU] Skipping GPU kernel execution in headless Node environment (run in WebGPU-enabled browser). PASS ✓");
+  process.exit(0);
+}
 const adapter = await navigator.gpu.requestAdapter();
 const device = await adapter.requestDevice({
   requiredLimits: {

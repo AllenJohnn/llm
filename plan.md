@@ -78,30 +78,68 @@
 
 ---
 
-## 3. Current Working State
+### Milestone 12: Zero-Config Local Signaling Server (`PeerServer`)
+- Created [`scripts/signal-server.mjs`](file:///c:/Users/NEEHA%20NAZER/Documents/LLM/llm/scripts/signal-server.mjs) running a local WebSocket PeerServer on port 9000.
+- Added `npm run signal` script to `package.json`.
+- Eliminates any external dependency on `0.peerjs.com`, enabling 100% offline local demonstrations.
 
-- **Local Server:** `npm run serve` serves `swarmLLM` on port 8080.
-- **Models Ready:**
-  - `qwen3-0.6b`: Fully downloaded in `models/qwen/model.gguf` (639 MB) — verified with golden reference test.
-  - `qwen2.5-coder-7b`: Local file present in `models/qwen25coder/model.gguf` (3.10 GB) — bias support & auto-config complete.
-  - All 10 models configured with fast mirrors (`hf-mirror.com`) and Hugging Face fallbacks.
-- **Multi-Device Flow:**
-  - Host loads local model or streams from mirror.
-  - Workers receive layer assignments, inherit configuration via WebRTC, and stream only their assigned layers.
-  - Inference runs collaboratively across WebGPU devices via pipeline parallelism.
+### Milestone 13: Universal Model Downloader & Local Weight Verification
+- Created [`scripts/download_model.mjs`](file:///c:/Users/NEEHA%20NAZER/Documents/LLM/llm/scripts/download_model.mjs) supporting all 10 models in the SwarmLLM catalog.
+- Features chunked streaming download with progress bar, download resumption (`Range` requests), high-speed mirror routing (`hf-mirror.com`), and automatic fallback to `huggingface.co`.
+- Downloads model weights, `config.json`, and `tokenizer.json` into primary directories (`models/<dir>/model.gguf`) and root candidate paths (`models/<model-name>.gguf`).
+- Downloaded and verified local offline models: `smollm-135m` (256.6 MB safetensors) and `qwen3-0.6b` (609.8 MB GGUF).
+
+### Milestone 14: Single-System Split-Tab Demonstration Workflow
+- Enhanced [`room.js`](file:///c:/Users/NEEHA%20NAZER/Documents/LLM/llm/room.js), [`p2p.html`](file:///c:/Users/NEEHA%20NAZER/Documents/LLM/llm/p2p.html), and [`room/index.html`](file:///c:/Users/NEEHA%20NAZER/Documents/LLM/llm/room/index.html).
+- Added `+ Split Demo Tab` button in host room screen: clicking it automatically opens a second browser tab with the room code and local signaling pre-filled.
+- Updated `copyRoomLink()` to preserve `&signal=localhost:9000` query parameter.
+- Enhanced signaling timeout alert to provide a 1-click fallback link to local PeerServer.
+
+### Milestone 15: Unified Demonstration Suite (`npm run demo`)
+- Created [`scripts/demo.mjs`](file:///c:/Users/NEEHA%20NAZER/Documents/LLM/llm/scripts/demo.mjs) launching both the static server (port 8080) and local signaling server (port 9000) concurrently.
+- Automatically detects local LAN IP to provide QR/URL access for mobile devices on the same Wi-Fi.
+- Created comprehensive guide in [`docs/demo-guide.md`](file:///c:/Users/NEEHA%20NAZER/Documents/LLM/llm/docs/demo-guide.md).
+
+### Milestone 16: Fallback Mode with Groq API & Qwen 27B Model
+- Created [`room/groq.js`](file:///c:/Users/NEEHA%20NAZER/Documents/LLM/llm/room/groq.js) implementing streaming and non-streaming Groq API integration using model `qwen/qwen3.8-27b` (Qwen 27B).
+- Added `var fallbackmode` in [`room.js`](file:///c:/Users/NEEHA%20NAZER/Documents/LLM/llm/room.js) and [`tests/test_new_models.js`](file:///c:/Users/NEEHA%20NAZER/Documents/LLM/llm/tests/test_new_models.js).
+- When `fallbackmode` is enabled (via UI button, URL parameter `?fallbackmode=1`, `window.fallbackmode = true`, or `FALLBACKMODE=true` in Node), inference immediately routes to Groq API with the Qwen 27B model and streams tokens into the chat interface.
+- Added Fallback Mode button (`#mode-fallback`) in [`p2p.html`](file:///c:/Users/NEEHA%20NAZER/Documents/LLM/llm/p2p.html) and [`room/index.html`](file:///c:/Users/NEEHA%20NAZER/Documents/LLM/llm/room/index.html).
+- Added comprehensive unit tests in [`tests/unit/run_node_tests.mjs`](file:///c:/Users/NEEHA%20NAZER/Documents/LLM/llm/tests/unit/run_node_tests.mjs) (all 39 tests passing) and [`tests/test_fallbackmode.js`](file:///c:/Users/NEEHA%20NAZER/Documents/LLM/llm/tests/test_fallbackmode.js).
 
 ---
 
-## 4. Next Steps (To Continue Later)
+## 3. Current Working State
 
-1. **Local Signaling Server Option (`PeerServer`)**:
-   - Provide a zero-configuration local signaling server script (`npx peerjs --port 9000`) for environments where public `0.peerjs.com` is unreachable or firewalled.
-2. **Local Multi-Tab Transport (`BroadcastChannel`)**:
-   - Add a same-origin loopback transport so testing two tabs on the same computer runs via `postMessage`/`BroadcastChannel` with 0ms latency, bypassing WebRTC STUN/TURN entirely.
-3. **Live Demonstration Checklist**:
-   - Device A (Host, RTX 4060): `npm run serve`, open `http://localhost:8080/room/`, create room.
-   - Device B (Phone/Laptop on same Wi-Fi): open `http://<host-ip>:8080/room/`, enter 4-letter room code.
-   - Select model (e.g. `qwen3-0.6b` or `qwen2.5-coder-7b`), click **Start Swarm**, and generate responses.
+- **Demonstration Suite:** `npm run demo` starts static web server + local PeerServer.
+- **Active Servers:**
+  - Static Web Server: `http://localhost:8080/room`
+  - Local PeerServer: `ws://localhost:9000`
+- **Models Downloaded & Ready for Offline Demo:**
+  - `smollm-135m`: `models/model/model.safetensors` & `models/smollm-135m.safetensors` (256.6 MB).
+  - `qwen3-0.6b`: `models/qwen/model.gguf` & `models/qwen3-0.6b.gguf` (609.8 MB).
+  - `qwen2.5-coder-1.5b`: `models/qwen25coder15/model.gguf` & `models/qwen2.5-coder-1.5b-instruct-q4_0.gguf` (1016.8 MB).
+  - Any of the 10 models can be downloaded on-demand with `npm run download <model-id>`.
+- **Fallback Mode:** `fallbackmode` variable routes requests to Groq Cloud running `qwen/qwen3.8-27b` (Qwen 27B).
+- **Test Suite:**
+  - `npm run test:node`: All 39 tests pass.
+  - `node tests/test_fallbackmode.js`: Fallback Mode validation passes.
+  - `node tests/test_topologies.js`: All Solo, 2-Device Mesh, 3-Device Chain, and 16-Device Swarm tests pass.
+
+---
+
+## 4. How to Run the Demonstration
+
+1. Run:
+   ```bash
+   npm run demo
+   ```
+2. **Single-System Demo (Split Screen):**
+   - Tab 1 (Host): Open `http://localhost:8080/room?signal=localhost:9000`, click **Create room**.
+   - Click **+ Split Demo Tab** to launch Tab 2 (Worker), then click **Join room**.
+   - Select **SmolLM 135M** or **Qwen3 0.6B**, click **Start Swarm**, and send prompts!
+3. **Multi-Device Demo (Wi-Fi):**
+   - Open `http://<your-lan-ip>:8080/room?signal=<your-lan-ip>:9000` on your phone, join room, and run inference across phone + laptop.
 
 ---
 
