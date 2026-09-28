@@ -27,7 +27,7 @@
     "demo": "node scripts/demo.mjs",
     "models": "node scripts/download_model.mjs list",
     "download": "node scripts/download_model.mjs",
-    "tunnel": "npx -y @ngrok/ngrok http 8080",
+    "tunnel": "npx -y localtunnel --port 8080",
     "deploy:staging": "scripts/deploy-staging.sh",
     "e2e": "node tests/e2e/room.mjs"
   },
@@ -37,8 +37,5 @@
   "devDependencies": {
     "peer": "^1.0.2",
     "playwright": "1.49.1"
-  },
-  "dependencies": {
-    "marked": "^18.0.14"
   }
 }

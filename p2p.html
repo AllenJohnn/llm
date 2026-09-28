@@ -1091,27 +1091,27 @@ window.swarmStart = function(create) {
       ['/room/perf-sidebar.js', 'room/perf-sidebar.js']
     ];
 
-    for (const [url, name] of subs) {
-      try {
+    // 2. Test fetching all imported submodules in parallel
+    try {
+      await Promise.all(subs.map(async ([url, name]) => {
         const subResp = await fetch(url);
         if (!subResp.ok) {
-          notify(`<b>Missing file:</b> <code>${name}</code> returned HTTP ${subResp.status}`);
-          return;
+          throw new Error(`Missing file: ${name} returned HTTP ${subResp.status}`);
         }
-      } catch (e) {
-        notify(`<b>Blocked/Network error:</b> Cannot fetch <code>${name}</code> (${e.message})`);
-        return;
-      }
+      }));
+    } catch (e) {
+      notify(`<b>Network error:</b> ${e.message}`);
+      return;
     }
 
     // 3. Test importing submodules individually to isolate syntax/eval issues
-    for (const [url, name] of subs) {
-      try {
-        await import(url);
-      } catch (e) {
-        notify(`<b>Submodule error in ${name}:</b><br>${e.message || e}`);
-        return;
-      }
+    try {
+      await Promise.all(subs.map(([url, name]) => import(url).catch(e => {
+        throw new Error(`Submodule error in ${name}: ${e.message || e}`);
+      })));
+    } catch (e) {
+      notify(`<b>${e.message}</b>`);
+      return;
     }
 
     // 4. Finally import room.js
