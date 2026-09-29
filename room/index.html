@@ -9,7 +9,7 @@
 
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<title>SwarmLLM · room</title>
+<title>WebSLICE · room</title>
 <script src="/vendor/peerjs.min.js"></script>
 <script>
 if (typeof Peer === "undefined") {
@@ -59,12 +59,12 @@ window.stepGB = function(d) {
   i.value = Math.min(64, Math.max(lo, cur + d * st));
 };
 
-window.swarmStart = function(create) {
+window.sliceStart = function(create) {
   if (window.__roomStart) {
     window.__roomStart(create);
   } else {
     var s = document.getElementById('join-status');
-    if (s) s.textContent = 'Loading SwarmLLM engine… please click again in a moment';
+    if (s) s.textContent = 'Loading WebSLICE engine… please click again in a moment';
   }
 };
 </script>
@@ -312,9 +312,9 @@ window.swarmStart = function(create) {
   #ai-status:empty { display: none; }
   #ai-need { width: 100%; display: flex; flex-direction: column; gap: 6px; }
   /* panel states: pick -> loading -> online */
-  #ai-panel.loading #ai-model, #ai-panel.loading #ai-start, #ai-panel.loading #ai-need,
-  #ai-panel.online:not(.groq-mode) #ai-model, #ai-panel.online #ai-start, #ai-panel.online #ai-need { display: none; }
-  #ai-panel.groq-mode #ai-model { display: block !important; }
+  #ai-panel.loading #ai-start, #ai-panel.loading #ai-need,
+  #ai-panel.online #ai-start, #ai-panel.online #ai-need { display: none; }
+  #ai-model { display: block; }
   #need-bar { height: 6px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
   #need-fill { height: 100%; width: 0%; background: var(--muted); border-radius: 4px; transition: width 0.9s cubic-bezier(0.2,0.8,0.2,1), background 0.4s; }
   #ai-need.ok #need-fill { background: var(--accent); }
@@ -891,33 +891,36 @@ window.swarmStart = function(create) {
     #join-screen input { width: min(320px, 84vw); }
   }
 </style>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
 
 <header>
-  <div class="logo"><a href="/">swarm<span>LLM</span></a></div>
-  <div class="tagline">swarm room</div>
+  <div class="logo"><a href="/">WebSLICE</a></div>
+  <div class="tagline">WebSLICE room</div>
   <div class="spacer"></div>
   <div id="topbar-peers" class="topbar-peers"></div>
   <div id="topbar-download" class="topbar-download"></div>
   <div id="room-badge" title="Click to copy room code"></div>
-  <a id="gh-link" href="https://github.com/AllenJohnn/llm" target="_blank" rel="noopener" aria-label="SwarmLLM on GitHub" title="source on GitHub"><svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+  <a id="gh-link" href="https://github.com/AllenJohnn/llm" target="_blank" rel="noopener" aria-label="WebSLICE on GitHub" title="source on GitHub"><svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
   <div id="topbar-progress-line" class="topbar-progress-line"><div id="topbar-progress-fill" class="topbar-progress-fill"></div></div>
 </header>
 
 <div id="join-screen">
   <div class="kicker">MESH INFERENCE</div>
-  <h1>start a <span>swarm</span></h1>
+  <h1>start a <span>WebSLICE</span></h1>
   <p>One room code. Every device that types it becomes part of one machine.</p>
   <input id="name-input" placeholder="device name (e.g. mac, phone)" maxlength="20">
   <input id="code-input" placeholder="ROOM CODE" maxlength="6">
   <div class="join-row">
-    <button id="create-btn" class="primary" type="button" onclick="window.swarmStart && window.swarmStart(true)">Create room</button>
-    <button id="join-btn" type="button" onclick="window.swarmStart && window.swarmStart(false)">Join room</button>
+    <button id="create-btn" class="primary" type="button" onclick="window.sliceStart && window.sliceStart(true)">Create room</button>
+    <button id="join-btn" type="button" onclick="window.sliceStart && window.sliceStart(false)">Join room</button>
   </div>
   <div id="join-pledge">give <button class="step" id="gb-minus" type="button" onclick="window.stepGB && window.stepGB(-1)">−</button><input id="join-gb" type="number" min="1" max="64" step="1" value="1" inputmode="numeric"><button class="step" id="gb-plus" type="button" onclick="window.stepGB && window.stepGB(1)">+</button> GB of memory</div>
   <div id="join-hint" style="font-family:var(--mono); font-size:11px; color:var(--muted); margin-top:8px;">
-    Offline / Single-System Demo: <a href="?signal=localhost:9000" style="color:var(--accent); text-decoration:underline;">Local PeerServer (:9000)</a>
+    Local / Single-System Network: <a href="?signal=localhost:9000" style="color:var(--accent); text-decoration:underline;">Local Tracker (:9000)</a>
   </div>
   <div id="join-status"></div>
 </div>
@@ -935,33 +938,31 @@ window.swarmStart = function(create) {
     <div id="ai-panel">
       <div class="side-k" style="display:flex;align-items:center;justify-content:space-between;width:100%;">
         <span>MODEL</span>
-        <span class="model-groq-badge" id="model-groq-badge" style="display: none !important;" style="font-size:10px; font-weight:600; text-transform:none; color:var(--accent, #10b981); background:rgba(16,185,129,0.12); padding:2px 7px; border-radius:4px; letter-spacing:0.02em;">via Groq</span>
       </div>
       <div id="ai-head">
-      <span id="ai-title">SWARM MODEL</span>
+      <span id="ai-title">WEBSLICE MODEL</span>
       <select id="ai-model">
         <option value="qwen3-0.6b">Qwen3 0.6B · Q8</option>
         <option value="qwen3-1.7b">Qwen3 1.7B · Q8</option>
         <option value="qwen3-4b">Qwen3 4B · Q8</option>
-        <option value="qwen2.5-coder-1.5b">Qwen2.5 Coder 1.5B · Q4 (fast mirror)</option>
+        <option value="qwen2.5-coder-1.5b">Qwen2.5 Coder 1.5B · Q4</option>
         <option value="qwen2.5-coder-7b">Qwen2.5 Coder 7B · Q4 (Code &amp; Web)</option>
         <option value="deepseek-r1-distill-qwen-14b">DeepSeek-R1 Distill Qwen 14B · Q4 (Reasoning)</option>
         <option value="qwq-32b">Qwen QwQ 32B · Q4 (Deep Reasoning)</option>
         <option value="phi-4-mini">Phi-4 mini · Q4 (coding &amp; reasoning)</option>
         <option value="qwen3.8-27b">Qwen 3.8 27B · Q4</option>
-        <option value="smollm-135m">SmolLM 135M · bf16 (Fast Test · 270 MB)</option>
       </select>
-      <div class="sidebar-fallback-card" id="sidebar-fallback-card" title="Toggle Groq Cloud API Mode (0 GB download, instant responses via Groq)">
+      <div class="sidebar-fallback-card" id="sidebar-fallback-card" title="Toggle fallback mode">
         <div class="sfc-header">
           <div class="sfc-title-row">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="sfc-icon"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-            <span>Groq Mode</span>
+            <span>Fallback mode</span>
           </div>
-          <button type="button" class="sfc-toggle" id="sidebar-fallback-toggle" aria-label="Toggle Groq Mode">
+          <button type="button" class="sfc-toggle" id="sidebar-fallback-toggle" aria-label="Toggle fallback mode">
             <span class="sfc-toggle-thumb"></span>
           </button>
         </div>
-        <div class="sfc-desc" id="sfc-desc">Groq API · 0 GB download · instant</div>
+        <div class="sfc-desc" id="sfc-desc">Disabled · uses downloaded models</div>
       </div>
       <div id="ai-need">
         <div id="need-bar"><div id="need-fill"></div></div>
@@ -1001,7 +1002,7 @@ window.swarmStart = function(create) {
     <div id="ai-output"></div>
     <div id="ai-row">
       <div class="sender-container">
-        <textarea id="ai-prompt" rows="1" placeholder="Ask the swarm anything… (Shift+Enter for newline)"></textarea>
+        <textarea id="ai-prompt" rows="1" placeholder="Ask the room anything… (Shift+Enter for newline)"></textarea>
         <div class="sender-actions">
           <div class="sender-left-controls">
             <div class="think-mode-selector" id="think-mode-selector" title="Switch response mode">
@@ -1014,9 +1015,9 @@ window.swarmStart = function(create) {
                 <span>Deep Think</span>
               </button>
             </div>
-            <button type="button" class="fallback-mode-btn" id="mode-fallback" title="Toggle Groq Mode: When enabled, uses Groq API for instant responses (0 GB download). When disabled, uses local WebGPU swarm.">
+            <button type="button" class="fallback-mode-btn" id="mode-fallback" title="Toggle fallback mode">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-              <span class="fallback-label">Groq</span>
+              <span class="fallback-label">Fallback off</span>
             </button>
             <div class="sender-hint"><span class="kbd-hint">↵ Send</span><span class="kbd-hint">⇧↵ New line</span></div>
           </div>
@@ -1034,14 +1035,14 @@ window.swarmStart = function(create) {
 
 <div id="toasts"></div>
 <script type="module">
-  async function initSwarm() {
+  async function initSlice() {
     const s = document.getElementById('join-status');
     const notify = (msg, isErr = true) => {
       if (s) {
         s.style.color = isErr ? 'var(--err, #d1242f)' : 'var(--warn, #b58500)';
         s.innerHTML = msg;
       }
-      console.warn('[SwarmLLM Loader]', msg);
+      console.warn('[WebSLICE Loader]', msg);
     };
 
     const roomUrl = '/room.js?v=' + Date.now();
@@ -1120,13 +1121,13 @@ window.swarmStart = function(create) {
       if (s && (s.textContent.includes('Loading') || s.textContent.includes('HTTP'))) {
         s.textContent = '';
       }
-      console.log('SwarmLLM room module loaded and initialized successfully');
+      console.log('WebSLICE room module loaded and initialized successfully');
     } catch (e) {
       notify(`<b>Error in room.js:</b> ${e.message || e}`);
     }
   }
 
-  initSwarm();
+  initSlice();
 </script>
 </body>
 </html>

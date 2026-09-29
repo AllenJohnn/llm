@@ -1,5 +1,5 @@
-// Groq API integration for SwarmLLM
-// Model: Qwen 27B and mapped swarm models
+// Groq API integration for webslice
+// Model: Qwen 27B and mapped cluster models
 import {
   GROQ_PROXY_URL,
   GROQ_DIRECT_URL,
@@ -34,7 +34,7 @@ export function getGroqApiKey() {
       const urlKey = new URLSearchParams(window.location?.search).get("groq_api_key") ||
                      new URLSearchParams(window.location?.search).get("groq_key");
       if (urlKey) return urlKey.trim();
-      const stored = localStorage.getItem("swarm_groq_api_key") || localStorage.getItem("groq_api_key");
+      const stored = localStorage.getItem("webslice_groq_api_key") || localStorage.getItem("groq_api_key");
       if (stored) return stored.trim();
     } catch {}
   }
@@ -50,16 +50,16 @@ export function setGroqApiKey(key) {
     window.groqApiKey = cleanKey;
     try {
       if (cleanKey) {
-        localStorage.setItem("swarm_groq_api_key", cleanKey);
+        localStorage.setItem("webslice_groq_api_key", cleanKey);
       } else {
-        localStorage.removeItem("swarm_groq_api_key");
+        localStorage.removeItem("webslice_groq_api_key");
       }
     } catch {}
   }
 }
 
 /**
- * Asynchronously load environment variables from /env.json and /.env in browser.
+ * Load public runtime settings from the server without exposing secret environment values.
  */
 export async function loadBrowserEnv() {
   if (typeof window === "undefined") {
@@ -72,7 +72,7 @@ export async function loadBrowserEnv() {
   const envData = {};
 
   try {
-    const res = await fetch("/env.json?t=" + Date.now());
+    const res = await fetch("/api/config?t=" + Date.now(), { cache: "no-store" });
     if (res.ok) {
       const json = await res.json();
       Object.assign(envData, json);

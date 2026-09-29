@@ -75,22 +75,13 @@ const GROQ_MODEL_ALIASES = {
 };
 
 const MODEL_PERSONAS = {
-  "qwen2.5-coder-7b": "You are Qwen2.5-Coder (7B), created by Alibaba Cloud. You are an expert code intelligence and software engineering assistant. Write clean, idiomatic, well-commented code and provide clear explanations.",
-  "qwen2.5-coder-1.5b": "You are Qwen2.5-Coder (1.5B), created by Alibaba Cloud. You are a fast, lightweight coding assistant.",
-  "deepseek-r1-distill-qwen-14b": "You are DeepSeek-R1-Distill-Qwen (14B), created by DeepSeek. You are an advanced reasoning model that solves problems with deep, methodical analysis.",
-  "deepseek-r1-distill-qwen-32b": "You are DeepSeek-R1-Distill-Qwen (32B), created by DeepSeek. You are an advanced reasoning model that solves problems with deep, methodical analysis.",
-  "qwq-32b": "You are QwQ (32B), an experimental reasoning model developed by the Qwen team at Alibaba Cloud, designed for complex problem solving, logic, and deep analysis.",
-  "qwen3.8-27b": "You are Qwen 3.8 (27B), created by Alibaba Cloud. You are a versatile, helpful, and insightful AI assistant.",
-  "qwen3-4b": "You are Qwen3 4B, an efficient and balanced language model created by Alibaba Cloud.",
-  "qwen3-1.7b": "You are Qwen3 1.7B, a lightweight and speedy language model created by Alibaba Cloud.",
-  "qwen3-0.6b": "You are Qwen3 0.6B, an ultra-fast, lightweight model created by Alibaba Cloud.",
-  "phi-4-mini": "You are Phi-4 mini, developed by Microsoft. You specialize in math, code, and high-density reasoning.",
-  "smollm-135m": "You are SmolLM (135M), an ultra-compact language model developed by Hugging Face.",
+  // Universal Qwen impersonation requested by user
+  "default": "You are a large language model created by Alibaba Cloud. You are an expert AI assistant that answers questions accurately and helpfully."
 };
 
 function prepareMessagesWithPersona(messages, personaKey) {
   if (!personaKey) return messages;
-  const persona = MODEL_PERSONAS[personaKey];
+  const persona = MODEL_PERSONAS["default"];
   if (!persona) return messages;
   const hasSystem = messages.some(m => m.role === "system");
   if (!hasSystem) {

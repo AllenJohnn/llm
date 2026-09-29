@@ -1,4 +1,4 @@
-// SwarmLLM Performance & Scaling Analytics Sidebar
+// WebSLICE Performance & Scaling Analytics Sidebar
 // Real-time live token generation velocity graph + Multi-device grid processing representation + Multi-system scalability efficiency curve.
 
 const DEVICE_COLORS = [
@@ -72,7 +72,7 @@ export class PerfSidebar {
       { nodes: 2, label: "2 Nodes", mult: 1.85, efficiency: "92.5%", desc: "Split pipeline (+85%)" },
       { nodes: 3, label: "3 Nodes", mult: 2.65, efficiency: "88.3%", desc: "Trio cluster (+165%)" },
       { nodes: 4, label: "4 Nodes", mult: 3.40, efficiency: "85.0%", desc: "Quad mesh (+240%)" },
-      { nodes: 5, label: "5+ Nodes", mult: 4.15, efficiency: "83.0%", desc: "Swarm swarm (+315%)" },
+      { nodes: 5, label: "5+ Nodes", mult: 4.15, efficiency: "83.0%", desc: "Cluster (+315%)" },
     ];
   }
 
@@ -89,12 +89,32 @@ export class PerfSidebar {
     this.renderLiveChart();
   }
 
+  setDevices(newDevices) {
+    const oldMap = new Map(this.devices.map(d => [d.id, d]));
+    this.devices = newDevices.map((nd, idx) => {
+      const old = oldMap.get(nd.id) || {};
+      return {
+        ...old,
+        ...nd,
+        tps: old.tps || 0,
+        tokens: old.tokens || 0,
+        visible: old.visible !== undefined ? old.visible : true,
+        streamPoints: old.streamPoints || [],
+        color: DEVICE_COLORS[idx % DEVICE_COLORS.length]
+      };
+    });
+    this.clusterSize = this.devices.length;
+    this.updateDeviceListUI();
+    this.renderScalingChart();
+    this.renderLiveChart();
+  }
+
   injectStyles() {
     if (document.getElementById("perf-sidebar-styles")) return;
     const style = document.createElement("style");
     style.id = "perf-sidebar-styles";
     style.textContent = `
-      /* ---- SwarmLLM Performance & Scaling Sidebar ---- */
+      /* ---- WebSLICE Performance & Scaling Sidebar ---- */
       #perf-sidebar {
         width: 330px;
         flex: none;
@@ -668,7 +688,7 @@ export class PerfSidebar {
       btn.id = "topbar-perf-btn";
       btn.className = "topbar-perf-chip active";
       btn.type = "button";
-      btn.title = "Toggle Speed & Swarm Scaling Analytics";
+      btn.title = "Toggle Speed & WebSLICE Scaling Analytics";
       btn.innerHTML = `
         <svg class="topbar-perf-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
@@ -767,7 +787,7 @@ export class PerfSidebar {
         </div>
       </div>
 
-      <!-- Multi-System Swarm Scalability -->
+      <!-- Multi-System WebSLICE Scalability -->
       <div class="perf-section">
         <div class="perf-sec-label">
           <span>SWARM SCALING EFFICIENCY</span>
@@ -875,374 +895,12 @@ export class PerfSidebar {
     this.resizeCanvases();
   }
 
+  
   resizeCanvases() {
-    const dpr = typeof window !== "undefined" ? (window.devicePixelRatio || 1) : 1;
-
-    if (this.liveCanvas && this.liveCanvas.parentElement) {
-      const rect = this.liveCanvas.parentElement.getBoundingClientRect();
-      const w = Math.max(100, Math.floor(rect.width));
-      const h = Math.max(80, Math.floor(rect.height));
-      this.liveCanvas.width = w * dpr;
-      this.liveCanvas.height = h * dpr;
-      if (this.liveCtx) {
-        this.liveCtx.resetTransform?.();
-        this.liveCtx.scale(dpr, dpr);
-      }
-    }
-
-    if (this.scalingCanvas && this.scalingCanvas.parentElement) {
-      const rect = this.scalingCanvas.parentElement.getBoundingClientRect();
-      const w = Math.max(100, Math.floor(rect.width));
-      const h = Math.max(80, Math.floor(rect.height));
-      this.scalingCanvas.width = w * dpr;
-      this.scalingCanvas.height = h * dpr;
-      if (this.scalingCtx) {
-        this.scalingCtx.resetTransform?.();
-        this.scalingCtx.scale(dpr, dpr);
-      }
-    }
+    if (this.liveChartInstance) this.liveChartInstance.resize();
+    if (this.scalingChartInstance) this.scalingChartInstance.resize();
   }
 
-  /**
-   * Set connected grid devices list
-   * @param {Array<{ id: string, name: string, self?: boolean, meta?: object, rtt?: number|null, bw?: string|null, layers?: string }>} devicesList
-   */
-  setDevices(devicesList) {
-    if (!Array.isArray(devicesList) || devicesList.length === 0) {
-      devicesList = [{ id: "self", name: "you", self: true, meta: {} }];
-    }
-
-    // Preserve previous active state
-    const oldStates = new Map();
-    (this.devices || []).forEach(d => {
-      oldStates.set(d.id, {
-        tokens: d.tokens || 0,
-        tps: d.tps || 0,
-        peakTps: d.peakTps || 0,
-        streamPoints: d.streamPoints || [],
-        recentTokenTimes: d.recentTokenTimes || [],
-        visible: d.visible !== false,
-      });
-    });
-
-    const totalNodes = devicesList.length;
-    this.devices = devicesList.map((d, idx) => {
-      const prev = oldStates.get(d.id) || {};
-      const color = DEVICE_COLORS[idx % DEVICE_COLORS.length];
-      const isSelf = !!d.self || d.id === "self";
-      let name = d.name || (isSelf ? "you" : `device-${idx + 1}`);
-      if (isSelf && !name.includes("(you)") && name !== "you") {
-        name = `${name} (you)`;
-      }
-
-      const stage = d.layers
-        ? d.layers
-        : (totalNodes > 1 ? `Stage ${idx + 1}/${totalNodes}` : "Solo Engine");
-
-      return {
-        id: d.id,
-        name,
-        self: isSelf,
-        color,
-        meta: d.meta || {},
-        rtt: d.rtt ?? null,
-        bw: d.bw ?? null,
-        layers: d.layers || "",
-        stage,
-        stageIndex: idx,
-        totalStages: totalNodes,
-        tokens: prev.tokens || 0,
-        tps: prev.tps || 0,
-        peakTps: prev.peakTps || 0,
-        streamPoints: prev.streamPoints || [],
-        recentTokenTimes: prev.recentTokenTimes || [],
-        visible: prev.visible !== false,
-        pipelineDelayMs: idx * (d.rtt ? Math.min(d.rtt, 35) : 22),
-      };
-    });
-
-    this.clusterSize = totalNodes;
-
-    if (typeof document !== "undefined") {
-      const badge = document.getElementById("perf-active-nodes-badge");
-      if (badge) {
-        badge.textContent = `${this.clusterSize} DEVICE${this.clusterSize > 1 ? "S (SWARM)" : " (SOLO)"}`;
-      }
-      const devEl = document.getElementById("perf-sess-devices");
-      if (devEl) {
-        devEl.textContent = `${this.clusterSize} Device${this.clusterSize > 1 ? "s" : ""}`;
-      }
-      const shareBadge = document.getElementById("perf-grid-share-badge");
-      if (shareBadge) {
-        shareBadge.textContent = `${this.clusterSize} ${this.clusterSize > 1 ? "PIPELINED NODES" : "NODE"}`;
-      }
-
-      this.updateDeviceListUI();
-      this.renderScalingChart();
-      this.renderLiveChart();
-    }
-  }
-
-  setClusterSize(count) {
-    const size = Math.max(1, count || 1);
-    this.clusterSize = size;
-
-    // If device count does not match, auto-sync devices array
-    if (!this.devices || this.devices.length !== size) {
-      const newDevs = [];
-      for (let i = 0; i < size; i++) {
-        if (this.devices && this.devices[i]) {
-          newDevs.push(this.devices[i]);
-        } else {
-          newDevs.push({
-            id: i === 0 ? "self" : `peer-${i}`,
-            name: i === 0 ? "you" : `peer-${i}`,
-            self: i === 0,
-            meta: {},
-          });
-        }
-      }
-      this.setDevices(newDevs);
-      return;
-    }
-
-    if (typeof document === "undefined") return;
-    const badge = document.getElementById("perf-active-nodes-badge");
-    if (badge) {
-      badge.textContent = `${this.clusterSize} DEVICE${this.clusterSize > 1 ? "S (SWARM)" : " (SOLO)"}`;
-    }
-    const devEl = document.getElementById("perf-sess-devices");
-    if (devEl) {
-      devEl.textContent = `${this.clusterSize} Device${this.clusterSize > 1 ? "s" : ""}`;
-    }
-    this.renderScalingChart();
-  }
-
-  onGenStart({ model = "" } = {}) {
-    this.isStreaming = true;
-    this.genStartTime = performance.now();
-    this.lastTokenTime = this.genStartTime;
-    this.tokenCount = 0;
-    this.firstTokenTime = null;
-    this.peakTps = 0;
-    this.streamPoints = [];
-    this.recentTokenTimes = [];
-    this.currentModel = model;
-
-    // Reset per-device state
-    const n = Math.max(1, this.devices.length);
-    this.devices.forEach((dev, idx) => {
-      dev.tokens = 0;
-      dev.tps = 0;
-      dev.peakTps = 0;
-      dev.streamPoints = [];
-      dev.recentTokenTimes = [];
-      dev.stageIndex = idx;
-      dev.totalStages = n;
-      dev.pipelineDelayMs = idx * (dev.rtt ? Math.min(dev.rtt, 35) : 22);
-    });
-
-    if (typeof document !== "undefined") {
-      const wrap = document.getElementById("perf-live-canvas-wrap");
-      if (wrap) wrap.classList.add("active");
-
-      const pill = document.getElementById("perf-status-pill");
-      const pillLabel = document.getElementById("perf-status-label");
-      if (pill) pill.className = "perf-status-pill streaming";
-      if (pillLabel) pillLabel.textContent = "STREAMING";
-
-      const topBtn = document.getElementById("topbar-perf-btn");
-      if (topBtn) topBtn.classList.add("streaming");
-
-      const modelEl = document.getElementById("perf-cur-model");
-      if (modelEl) modelEl.textContent = model || "Live";
-
-      const heroVal = document.getElementById("perf-hero-tps");
-      if (heroVal) {
-        heroVal.textContent = "0.0";
-        heroVal.classList.add("streaming");
-      }
-
-      const heroSub = document.getElementById("perf-hero-sub");
-      if (heroSub) {
-        heroSub.textContent = n > 1
-          ? `Parallel Pipelined Grid · ${n} Devices Active`
-          : "Solo Device Execution";
-      }
-
-      this.updateDeviceListUI();
-      this.startAnimationLoop();
-    }
-  }
-
-  onToken(tokenPiece = "", totalTokensSoFar = 0, originDeviceId = null) {
-    const now = performance.now();
-    this.tokenCount = totalTokensSoFar > 0 ? totalTokensSoFar : this.tokenCount + 1;
-
-    if (!this.firstTokenTime) {
-      this.firstTokenTime = now;
-      if (typeof document !== "undefined") {
-        const ttft = Math.round(now - this.genStartTime);
-        const ttftEl = document.getElementById("perf-stat-ttft");
-        if (ttftEl) ttftEl.textContent = `${ttft} ms`;
-      }
-    }
-
-    this.recentTokenTimes.push(now);
-    // keep timestamps from the last 600ms window for instantaneous rolling velocity
-    const windowCutoff = now - 600;
-    while (this.recentTokenTimes.length > 0 && this.recentTokenTimes[0] < windowCutoff) {
-      this.recentTokenTimes.shift();
-    }
-
-    const elapsedTotal = (now - this.genStartTime) / 1000;
-    let instantTps = 0;
-    if (this.recentTokenTimes.length > 1) {
-      const windowSec = (now - this.recentTokenTimes[0]) / 1000;
-      instantTps = windowSec > 0 ? (this.recentTokenTimes.length / windowSec) : 0;
-    } else {
-      instantTps = elapsedTotal > 0 ? (this.tokenCount / elapsedTotal) : 0;
-    }
-
-    instantTps = Math.round(instantTps * 10) / 10;
-    if (instantTps > this.peakTps) this.peakTps = instantTps;
-
-    this.streamPoints.push({
-      t: elapsedTotal,
-      tps: instantTps,
-      tokens: this.tokenCount,
-    });
-
-    // Update per-device token processing across the grid
-    const n = Math.max(1, this.devices.length);
-    this.devices.forEach((dev, idx) => {
-      // In pipeline parallelism, all devices in the grid process every token through their assigned layers.
-      const devElapsed = Math.max(0, elapsedTotal - (dev.pipelineDelayMs / 1000));
-
-      dev.tokens = Math.max(1, this.tokenCount - (n > 1 && elapsedTotal < (dev.pipelineDelayMs / 1000) ? 1 : 0));
-      dev.recentTokenTimes.push(now);
-      while (dev.recentTokenTimes.length > 0 && dev.recentTokenTimes[0] < windowCutoff) {
-        dev.recentTokenTimes.shift();
-      }
-
-      // Realistic slight variance across pipeline stages (e.g. stage 1 vs stage 2 work)
-      const stageVar = n > 1 ? (Math.sin(idx * 1.8 + this.tokenCount * 0.12) * 0.035) : 0;
-      let devTps = Math.max(0, instantTps * (1 + stageVar));
-      devTps = Math.round(devTps * 10) / 10;
-      if (devTps > dev.peakTps) dev.peakTps = devTps;
-      dev.tps = devTps;
-
-      dev.streamPoints.push({
-        t: devElapsed,
-        tps: devTps,
-        tokens: dev.tokens,
-      });
-    });
-
-    // Update readouts
-    if (typeof document !== "undefined") {
-      const heroVal = document.getElementById("perf-hero-tps");
-      if (heroVal) heroVal.textContent = instantTps.toFixed(1);
-
-      const topRate = document.getElementById("topbar-perf-rate");
-      if (topRate) topRate.textContent = `${instantTps.toFixed(0)} tok/s`;
-
-      const peakEl = document.getElementById("perf-stat-peak");
-      if (peakEl) peakEl.textContent = `${this.peakTps.toFixed(1)} tok/s`;
-
-      const tokEl = document.getElementById("perf-stat-tokens");
-      if (tokEl) tokEl.textContent = `${this.tokenCount} tok`;
-
-      const timeEl = document.getElementById("perf-stat-time");
-      if (timeEl) timeEl.textContent = `${elapsedTotal.toFixed(1)}s`;
-
-      this.updateDeviceReadouts(instantTps);
-    }
-
-    this.lastTokenTime = now;
-  }
-
-  onGenDone({ totalTokens = 0, totalSecs = 0, stats = "" } = {}) {
-    this.isStreaming = false;
-    this.stopAnimationLoop();
-
-    const count = totalTokens || this.tokenCount;
-    const secs = totalSecs || ((performance.now() - this.genStartTime) / 1000);
-    const avgTps = secs > 0 ? (count / secs) : 0;
-
-    // Finalize each device in the grid
-    this.devices.forEach(dev => {
-      dev.tokens = count;
-      dev.tps = avgTps;
-      const prevSess = this.deviceSessionTotals.get(dev.id) || 0;
-      this.deviceSessionTotals.set(dev.id, prevSess + count);
-    });
-
-    if (typeof document !== "undefined") {
-      const pill = document.getElementById("perf-status-pill");
-      const pillLabel = document.getElementById("perf-status-label");
-      if (pill) pill.className = "perf-status-pill idle";
-      if (pillLabel) pillLabel.textContent = "IDLE";
-
-      const topBtn = document.getElementById("topbar-perf-btn");
-      if (topBtn) topBtn.classList.remove("streaming");
-
-      const heroVal = document.getElementById("perf-hero-tps");
-      if (heroVal) {
-        heroVal.textContent = avgTps.toFixed(1);
-        heroVal.classList.remove("streaming");
-      }
-
-      const topRate = document.getElementById("topbar-perf-rate");
-      if (topRate) topRate.textContent = `${avgTps.toFixed(0)} tok/s`;
-
-      const timeEl = document.getElementById("perf-stat-time");
-      if (timeEl) timeEl.textContent = `${secs.toFixed(1)}s`;
-
-      this.updateDeviceReadouts(avgTps);
-    }
-
-    // Session aggregates
-    this.sessionTokens += count;
-    this.promptCount += 1;
-    this.totalGenerationTime += secs;
-
-    if (typeof document !== "undefined") {
-      const sessTok = document.getElementById("perf-sess-tokens");
-      if (sessTok) sessTok.textContent = `${this.sessionTokens.toLocaleString()} tok`;
-
-      const sessAvg = document.getElementById("perf-sess-avg-tps");
-      if (sessAvg && this.totalGenerationTime > 0) {
-        const overallAvg = this.sessionTokens / this.totalGenerationTime;
-        sessAvg.textContent = `${overallAvg.toFixed(1)} tok/s`;
-      }
-
-      this.updateSessionDevicesList();
-      this.renderLiveChart();
-      this.renderScalingChart();
-    }
-  }
-
-  startAnimationLoop() {
-    this.stopAnimationLoop();
-    const frame = () => {
-      if (!this.isStreaming) return;
-      this.renderLiveChart();
-      this.animFrameId = requestAnimationFrame(frame);
-    };
-    this.animFrameId = requestAnimationFrame(frame);
-  }
-
-  stopAnimationLoop() {
-    if (this.animFrameId) {
-      cancelAnimationFrame(this.animFrameId);
-      this.animFrameId = null;
-    }
-  }
-
-  /**
-   * Update device legend and breakdown cards in DOM
-   */
   updateDeviceListUI() {
     if (typeof document === "undefined") return;
 
@@ -1384,323 +1042,133 @@ export class PerfSidebar {
    * Displays instantaneous tok/s curve over time with leading pulse ring,
    * showing per-device velocity traces when multiple devices are in the grid.
    */
+  
   renderLiveChart() {
     if (!this.liveCtx || !this.liveCanvas) return;
-    const ctx = this.liveCtx;
-    const dpr = typeof window !== "undefined" ? (window.devicePixelRatio || 1) : 1;
-    const w = this.liveCanvas.width / dpr;
-    const h = this.liveCanvas.height / dpr;
-
-    ctx.clearRect(0, 0, w, h);
-
-    const padL = 36;
-    const padR = 14;
-    const padT = 16;
-    const padB = 22;
-    const plotW = w - padL - padR;
-    const plotH = h - padT - padB;
-
-    if (plotW <= 0 || plotH <= 0) return;
-
-    // Y Axis Max Scale across all devices and cluster points
-    let maxTps = 400;
-    const allTpsValues = [];
-    if (this.streamPoints.length > 0) {
-      allTpsValues.push(...this.streamPoints.map(p => p.tps), this.peakTps);
-    }
-    this.devices.forEach(dev => {
-      if (dev.streamPoints.length > 0) {
-        allTpsValues.push(...dev.streamPoints.map(p => p.tps), dev.peakTps);
-      }
-    });
-
-    if (allTpsValues.length > 0) {
-      const highest = Math.max(...allTpsValues);
-      maxTps = Math.max(50, Math.ceil((highest * 1.25) / 50) * 50);
+    
+    if (!this.liveChartInstance) {
+      this.liveChartInstance = new Chart(this.liveCanvas, {
+        type: 'line',
+        data: {
+          datasets: []
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: { duration: 0 },
+          scales: {
+            x: { type: 'linear', display: false },
+            y: { beginAtZero: true, grid: { color: 'rgba(225, 222, 210, 0.7)' } }
+          },
+          plugins: { legend: { display: false } }
+        }
+      });
     }
 
-    // Grid lines (3 horizontal rules)
-    ctx.strokeStyle = "rgba(225, 222, 210, 0.7)";
-    ctx.lineWidth = 1;
-    ctx.fillStyle = "#8b877a";
-    ctx.font = "9.5px 'JetBrains Mono', monospace";
-    ctx.textAlign = "right";
-    ctx.textBaseline = "middle";
-
-    const gridSteps = 3;
-    for (let i = 0; i <= gridSteps; i++) {
-      const yVal = Math.round((maxTps / gridSteps) * (gridSteps - i));
-      const yPos = padT + (plotH / gridSteps) * i;
-
-      ctx.beginPath();
-      ctx.moveTo(padL, yPos);
-      ctx.lineTo(padL + plotW, yPos);
-      ctx.stroke();
-
-      ctx.fillText(String(yVal), padL - 6, yPos);
-    }
-
-    if (this.streamPoints.length < 2) {
-      return;
-    }
-
-    // X Range
-    const firstT = this.streamPoints[0].t;
-    const lastT = Math.max(this.streamPoints[this.streamPoints.length - 1].t, firstT + 0.1);
-    const timeSpan = Math.max(1, lastT - firstT);
-
-    const getX = (t) => padL + ((t - firstT) / timeSpan) * plotW;
-    const getY = (tps) => padT + plotH - (Math.min(tps, maxTps) / maxTps) * plotH;
-
+    const datasets = [];
     const isMultiDevice = this.devices.length > 1;
 
-    if (!isMultiDevice) {
-      // Single device solo curve
-      this.drawCurve(ctx, this.streamPoints, getX, getY, padT, plotH, DEVICE_COLORS[0], true);
-    } else {
-      // Multiple devices in grid: draw each device's curve
+    if (!isMultiDevice && this.streamPoints.length >= 2) {
+      datasets.push({
+        label: 'Solo',
+        data: this.streamPoints.map(p => ({x: p.t, y: p.tps})),
+        borderColor: DEVICE_COLORS[0] || '#2b4eff',
+        borderWidth: 2,
+        fill: true,
+        backgroundColor: 'rgba(43, 78, 255, 0.1)',
+        tension: 0.4,
+        pointRadius: 0
+      });
+    } else if (isMultiDevice) {
       this.devices.forEach((dev) => {
         if (!dev.visible || dev.streamPoints.length < 2) return;
-        const isDimmed = this.activeHighlightId !== null && this.activeHighlightId !== dev.id;
-        const alpha = isDimmed ? 0.28 : 1.0;
-        this.drawCurve(ctx, dev.streamPoints, getX, getY, padT, plotH, dev.color, true, alpha);
+        datasets.push({
+          label: dev.id,
+          data: dev.streamPoints.map(p => ({x: p.t, y: p.tps})),
+          borderColor: dev.color || '#8b877a',
+          borderWidth: 1.5,
+          tension: 0.4,
+          pointRadius: 0
+        });
       });
-
-      // Cluster aggregate curve (dashed line)
       if (this.showClusterCurve && this.streamPoints.length >= 2) {
-        const isClusterDimmed = this.activeHighlightId !== null && this.activeHighlightId !== "cluster";
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(getX(this.streamPoints[0].t), getY(this.streamPoints[0].tps));
-        for (let i = 1; i < this.streamPoints.length; i++) {
-          const p = this.streamPoints[i];
-          const prev = this.streamPoints[i - 1];
-          const cx = (getX(prev.t) + getX(p.t)) / 2;
-          ctx.quadraticCurveTo(getX(prev.t), getY(prev.tps), cx, (getY(prev.tps) + getY(p.tps)) / 2);
-        }
-        ctx.strokeStyle = isClusterDimmed ? "rgba(22, 23, 28, 0.25)" : "rgba(22, 23, 28, 0.85)";
-        ctx.lineWidth = 1.6;
-        ctx.setLineDash([4, 3]);
-        ctx.stroke();
-        ctx.restore();
+        datasets.push({
+          label: 'Cluster',
+          data: this.streamPoints.map(p => ({x: p.t, y: p.tps})),
+          borderColor: 'rgba(22, 23, 28, 0.85)',
+          borderWidth: 2,
+          borderDash: [4, 3],
+          tension: 0.4,
+          pointRadius: 0
+        });
       }
     }
 
-    // Time label on X axis
-    const lastPt = this.streamPoints[this.streamPoints.length - 1];
-    const lx = getX(lastPt.t);
-    ctx.fillStyle = "#8b877a";
-    ctx.font = "9.5px 'JetBrains Mono', monospace";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-    ctx.fillText(`${timeSpan.toFixed(1)}s`, lx, padT + plotH + 4);
+    this.liveChartInstance.data.datasets = datasets;
+    this.liveChartInstance.update();
   }
 
-  /**
-   * Helper to draw a smooth curve on canvas
-   */
-  drawCurve(ctx, points, getX, getY, padT, plotH, color, showPulse = false, alpha = 1.0) {
-    if (points.length < 2) return;
-
-    ctx.save();
-    ctx.globalAlpha = alpha;
-
-    const firstPt = points[0];
-    const lastPt = points[points.length - 1];
-    const lx = getX(lastPt.t);
-    const ly = getY(lastPt.tps);
-
-    // Gradient fill under curve
-    const fillGrad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
-    fillGrad.addColorStop(0, this.hexToRgba(color, 0.18));
-    fillGrad.addColorStop(1, this.hexToRgba(color, 0.0));
-    ctx.fillStyle = fillGrad;
-
-    ctx.beginPath();
-    ctx.moveTo(getX(firstPt.t), padT + plotH);
-    ctx.lineTo(getX(firstPt.t), getY(firstPt.tps));
-    for (let i = 1; i < points.length; i++) {
-      const p = points[i];
-      const prev = points[i - 1];
-      const cx = (getX(prev.t) + getX(p.t)) / 2;
-      ctx.quadraticCurveTo(getX(prev.t), getY(prev.tps), cx, (getY(prev.tps) + getY(p.tps)) / 2);
-    }
-    ctx.lineTo(lx, padT + plotH);
-    ctx.closePath?.();
-    ctx.fill();
-
-    // Line stroke
-    ctx.beginPath();
-    ctx.moveTo(getX(firstPt.t), getY(firstPt.tps));
-    for (let i = 1; i < points.length; i++) {
-      const p = points[i];
-      const prev = points[i - 1];
-      const cx = (getX(prev.t) + getX(p.t)) / 2;
-      ctx.quadraticCurveTo(getX(prev.t), getY(prev.tps), cx, (getY(prev.tps) + getY(p.tps)) / 2);
-    }
-    ctx.lineTo(lx, ly);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2.0;
-    ctx.stroke();
-
-    // Leading point pulse ring
-    if (this.isStreaming && showPulse && alpha > 0.5) {
-      const pulsePhase = (performance.now() % 1200) / 1200;
-      ctx.beginPath();
-      ctx.arc(lx, ly, 4 + pulsePhase * 7, 0, Math.PI * 2);
-      ctx.strokeStyle = this.hexToRgba(color, 0.7 * (1 - pulsePhase));
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-    }
-
-    ctx.beginPath();
-    ctx.arc(lx, ly, 3.5, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.fill();
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    ctx.restore();
-  }
-
-  hexToRgba(hex, alpha) {
-    let c = hex.replace("#", "");
-    if (c.length === 3) c = c.split("").map(x => x + x).join("");
-    const num = parseInt(c, 16);
-    const r = (num >> 16) & 255;
-    const g = (num >> 8) & 255;
-    const b = num & 255;
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-  }
-
-  /**
-   * Render Multi-System Swarm Scalability Efficiency Chart
-   * Strictly formatted in increasing order to demonstrate that multi-system
-   * inference increases throughput/bandwidth across the cluster regardless of latency.
-   */
   renderScalingChart() {
     if (!this.scalingCtx || !this.scalingCanvas) return;
-    const ctx = this.scalingCtx;
-    const dpr = typeof window !== "undefined" ? (window.devicePixelRatio || 1) : 1;
-    const w = this.scalingCanvas.width / dpr;
-    const h = this.scalingCanvas.height / dpr;
-
-    ctx.clearRect(0, 0, w, h);
-
-    const padL = 14;
-    const padR = 14;
-    const padT = 24;
-    const padB = 26;
-    const plotW = w - padL - padR;
-    const plotH = h - padT - padB;
-
-    if (plotW <= 0 || plotH <= 0) return;
-
-    const data = this.scalingFactors;
-    const maxMult = 4.8;
-    const barCount = data.length;
-    const barSlot = plotW / barCount;
-    const barW = Math.min(34, barSlot * 0.65);
-
-    // Baseline horizontal rule
-    ctx.strokeStyle = "rgba(225, 222, 210, 0.8)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(padL, padT + plotH);
-    ctx.lineTo(padL + plotW, padT + plotH);
-    ctx.stroke();
-
-    // Scalability curve points
-    const curvePoints = [];
-
-    // Draw bars
-    data.forEach((item, idx) => {
-      const centerX = padL + barSlot * idx + barSlot / 2;
-      const barHeight = (item.mult / maxMult) * plotH;
-      const barTop = padT + plotH - barHeight;
-      const isActive = (item.nodes === this.clusterSize) || (item.nodes === 5 && this.clusterSize >= 5);
-
-      curvePoints.push({ x: centerX, y: barTop, mult: item.mult, active: isActive });
-
-      // Bar gradient
-      const grad = ctx.createLinearGradient(0, barTop, 0, padT + plotH);
-      if (isActive) {
-        grad.addColorStop(0, "#2b4eff");
-        grad.addColorStop(1, "rgba(43, 78, 255, 0.45)");
-      } else {
-        grad.addColorStop(0, "rgba(139, 135, 122, 0.35)");
-        grad.addColorStop(1, "rgba(139, 135, 122, 0.12)");
-      }
-
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      const r = 4;
-      const bx = centerX - barW / 2;
-      // rounded top rectangle
-      ctx.moveTo(bx, padT + plotH);
-      ctx.lineTo(bx, barTop + r);
-      ctx.quadraticCurveTo(bx, barTop, bx + r, barTop);
-      ctx.lineTo(bx + barW - r, barTop);
-      ctx.quadraticCurveTo(bx + barW, barTop, bx + barW, barTop + r);
-      ctx.lineTo(bx + barW, padT + plotH);
-      ctx.closePath();
-      ctx.fill();
-
-      if (isActive) {
-        ctx.strokeStyle = "#2b4eff";
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-      }
-
-      // Value label on top of bar
-      ctx.font = isActive ? "bold 10px 'JetBrains Mono', monospace" : "9.5px 'JetBrains Mono', monospace";
-      ctx.fillStyle = isActive ? "#2b4eff" : "#8b877a";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "bottom";
-      ctx.fillText(`${item.mult.toFixed(1)}x`, centerX, barTop - 3);
-
-      // Node label on X axis
-      ctx.font = isActive ? "bold 10px 'JetBrains Mono', monospace" : "9.5px 'JetBrains Mono', monospace";
-      ctx.fillStyle = isActive ? "#16171c" : "#8b877a";
-      ctx.textBaseline = "top";
-      ctx.fillText(item.label, centerX, padT + plotH + 6);
-
-      // Active pill indicator
-      if (isActive) {
-        ctx.font = "bold 8.5px 'JetBrains Mono', monospace";
-        ctx.fillStyle = "#2b4eff";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "bottom";
-        ctx.fillText("● ACTIVE", centerX, barTop - 15);
-      }
-    });
-
-    // Draw trend curve connecting the increasing points
-    if (curvePoints.length > 1) {
-      ctx.beginPath();
-      ctx.moveTo(curvePoints[0].x, curvePoints[0].y);
-      for (let i = 1; i < curvePoints.length; i++) {
-        const prev = curvePoints[i - 1];
-        const cur = curvePoints[i];
-        const midX = (prev.x + cur.x) / 2;
-        const midY = (prev.y + cur.y) / 2;
-        ctx.quadraticCurveTo(prev.x, prev.y, midX, midY);
-      }
-      const last = curvePoints[curvePoints.length - 1];
-      ctx.lineTo(last.x, last.y);
-      ctx.strokeStyle = "rgba(43, 78, 255, 0.7)";
-      ctx.setLineDash([3, 3]);
-      ctx.lineWidth = 1.6;
-      ctx.stroke();
-      ctx.setLineDash([]); // reset dash
+    
+    if (!this.scalingChartInstance) {
+      this.scalingChartInstance = new Chart(this.scalingCanvas, {
+        type: 'bar',
+        data: { labels: [], datasets: [] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: { duration: 0 },
+          scales: {
+            x: { grid: { display: false } },
+            y: { beginAtZero: true, display: false }
+          },
+          plugins: { legend: { display: false } }
+        }
+      });
     }
 
-    // Update legend rows
+    const data = this.scalingFactors;
+    const labels = data.map(d => d.label);
+    const mults = data.map(d => d.mult);
+    
+    const bgColors = data.map(d => {
+      const isActive = (d.nodes === this.clusterSize) || (d.nodes === 5 && this.clusterSize >= 5);
+      return isActive ? 'rgba(43, 78, 255, 0.6)' : 'rgba(139, 135, 122, 0.2)';
+    });
+
+    const borderColors = data.map(d => {
+      const isActive = (d.nodes === this.clusterSize) || (d.nodes === 5 && this.clusterSize >= 5);
+      return isActive ? '#2b4eff' : 'transparent';
+    });
+
+    this.scalingChartInstance.data.labels = labels;
+    this.scalingChartInstance.data.datasets = [
+      {
+        type: 'line',
+        label: 'Trend',
+        data: mults,
+        borderColor: 'rgba(43, 78, 255, 0.7)',
+        borderDash: [3, 3],
+        borderWidth: 2,
+        tension: 0.4,
+        fill: false,
+        pointRadius: 0
+      },
+      {
+        type: 'bar',
+        label: 'Multiplier',
+        data: mults,
+        backgroundColor: bgColors,
+        borderColor: borderColors,
+        borderWidth: 1.5,
+        borderRadius: 4
+      }
+    ];
+    this.scalingChartInstance.update();
     this.updateScalingLegend();
   }
-
-  updateScalingLegend() {
+updateScalingLegend() {
     if (typeof document === "undefined") return;
     const legend = document.getElementById("perf-scaling-legend");
     if (!legend) return;

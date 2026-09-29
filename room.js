@@ -1785,7 +1785,7 @@ function aiRejoin(newId, name) {
   else sendTo(newId, fresh);
   log("swarm", `${name} came back — reloading its layers`);
   aiStatus(`${name} reconnected, reloading its layers…`);
-  $("ai-row").style.display = ai.readyPeers.size >= ai.chain.length ? "flex" : "none";
+  $("ai-row").style.display = "flex";
 }
 function aiMaybeReady() {
   if (ai.role !== "host" || !ai.engine) return;
@@ -2687,7 +2687,7 @@ function toggleFallbackMode(forceState) {
     if ($("ai-panel")) $("ai-panel").classList.remove("groq-mode");
     if (!ai.engine) {
       if ($("ai-panel")) $("ai-panel").classList.remove("online");
-      if ($("ai-row")) $("ai-row").style.display = "none";
+      /* if ($("ai-row")) $("ai-row").style.display = "none"; */
       if ($("ai-empty")) {
         $("ai-empty").style.display = "";
         $("ai-empty").textContent = "pick a model and press start";

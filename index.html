@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<title>SwarmLLM · mesh inference</title>
-<meta name="description" content="Pool your phone, laptop, and friends' devices into one room, and run AI models none of them could hold alone.">
+<title>WebGPU-accelerated Sharded LLM Inference across Compute-constrained Edge devices (WebSLICE)</title>
+<meta name="description" content="— large language model, sharded across your devices' browser tabs — no install, no server, no single GPU big enough required.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -254,6 +254,34 @@
   }
   }
 </style>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          animation: {
+            blob: "blob 7s infinite",
+          },
+          keyframes: {
+            blob: {
+              "0%": { transform: "translate(0px, 0px) scale(1)" },
+              "33%": { transform: "translate(30px, -50px) scale(1.1)" },
+              "66%": { transform: "translate(-20px, 20px) scale(0.9)" },
+              "100%": { transform: "translate(0px, 0px) scale(1)" },
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .animation-delay-2000 { animation-delay: 2s; }
+    .animation-delay-4000 { animation-delay: 4s; }
+  </style>
 </head>
 <body>
 
@@ -262,45 +290,69 @@
 <div id="modal" hidden>
   <div id="modal-card">
     <button id="modal-x" aria-label="close">×</button>
-    <div class="sec-kicker">WHAT IS SWARMLLM</div>
-    <h3>A group of devices,<br>running one AI together.</h3>
+    <div class="sec-kicker">WHAT IS WEBSLICE</div>
+    <h3>WebGPU-accelerated Sharded LLM Inference<br>across Compute-constrained Edge devices.</h3>
     <p>Big models like <b>Qwen 3.8</b> are too large for any single phone or laptop. That is why AI lives in data centers.</p>
-    <p>SwarmLLM splits the model across every device in a room: each one downloads just its slice, and every word of the answer takes a lightning lap through all of them before it appears on every screen at once.</p>
+    <p>WebSLICE splits the model across every device in a room: each one downloads just its slice, and every word of the answer takes a lightning lap through all of them before it appears on every screen at once.</p>
     <p>No install. No accounts. No servers. Your words never leave the room.</p>
     <div class="modal-row">
-      <a class="cta" href="/room">start a swarm <span class="arrow">→</span></a>
+      <a class="cta" href="/room">start a WebSLICE <span class="arrow">→</span></a>
       <a id="modal-more" href="#how">read the full story ↓</a>
     </div>
   </div>
 </div>
 
 <nav id="nav">
-  <a class="wordmark ri" href="/">swarm<em>LLM</em></a>
+  <a class="wordmark ri" href="/">WebSLICE</a>
   <div class="spacer"></div>
   <a class="navlink ri d1" href="#how">what is this?</a>
-  <a class="gh ri d1" href="https://github.com/AllenJohnn/llm" target="_blank" rel="noopener" aria-label="SwarmLLM on GitHub"><svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span class="gh-label">github</span></a>
-  <a class="cta ri d1" href="/room">start a swarm <span class="arrow">→</span></a>
+  <a class="gh ri d1" href="https://github.com/AllenJohnn/llm" target="_blank" rel="noopener" aria-label="WebSLICE on GitHub"><svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span class="gh-label">github</span></a>
+  <a class="cta ri d1" href="/room">start a WebSLICE <span class="arrow">→</span></a>
 </nav>
 
-<div id="hero">
-  <div class="copy">
-    <div class="kicker ri">MESH INFERENCE</div>
-    <h1 class="ri d1">Your phone <span class="dim">can't run</span><br>Qwen 3.8<br><span class="acc">Your room can.</span></h1>
-    <p class="sub ri d2">Phones, laptops, friends' PCs: <b>one room code</b> away from becoming a single machine. Each holds a slice of the model; together they run the whole thing. Nothing to install.</p>
-    <a class="cta ri d3" href="/room">start a swarm <span class="arrow">→</span></a>
-  </div>
-  <div id="strip" class="ri d3">
-    <span>no servers</span><span class="sep">·</span>
-    <span>nothing leaves your room</span><span class="sep">·</span>
-    <span>one code to join</span>
+
+
+<div id="hero-modern" class="relative overflow-hidden bg-[#f5f4ee] text-[#16171c] min-h-[100svh] flex flex-col justify-center items-center pointer-events-auto">
+  <!-- Pastel Animated Background Blobs -->
+  <div class="absolute top-1/4 left-1/4 w-72 h-72 lg:w-96 lg:h-96 bg-blue-300/50 rounded-full mix-blend-multiply filter blur-[100px] opacity-60 animate-blob"></div>
+  <div class="absolute top-1/3 right-1/4 w-72 h-72 lg:w-96 lg:h-96 bg-purple-300/50 rounded-full mix-blend-multiply filter blur-[100px] opacity-60 animate-blob animation-delay-2000"></div>
+  <div class="absolute bottom-1/4 left-1/3 w-72 h-72 lg:w-96 lg:h-96 bg-pink-300/50 rounded-full mix-blend-multiply filter blur-[100px] opacity-60 animate-blob animation-delay-4000"></div>
+
+  <!-- Hero Content -->
+  <div class="relative z-10 max-w-6xl mx-auto px-6 text-center flex flex-col items-center">
+    
+    <div class="gsap-reveal inline-block px-5 py-2 rounded-full border border-[#e1ded2] bg-[#fbfaf5]/60 backdrop-blur-md text-xs sm:text-sm font-bold tracking-[0.2em] text-[#8b877a] uppercase mb-8 shadow-sm">
+      Mesh Inference Engine
+    </div>
+    
+    <h1 class="gsap-reveal text-[#16171c] font-extrabold tracking-tight leading-[1.05] mb-2" style="font-size: clamp(2rem, 5vw, 4rem);">
+      WebGPU-accelerated Sharded LLM Inference
+    </h1>
+    <h2 class="gsap-reveal text-[#2b4eff] font-extrabold tracking-tight leading-[1.05] mb-8" style="font-size: clamp(1.8rem, 4.5vw, 3.5rem);">
+      across Compute-constrained Edge devices
+    </h2>
+    
+    <div class="gsap-reveal mb-8 text-5xl sm:text-7xl font-black text-[#16171c] drop-shadow-sm tracking-tight">
+      (WebSLICE)
+    </div>
+
+    <p class="gsap-reveal text-lg sm:text-xl text-[#8b877a] max-w-3xl mx-auto leading-relaxed mb-12">
+      A large language model, sharded across your devices' browser tabs &mdash; no install, no server, no single GPU big enough required.
+    </p>
+
+    <a class="gsap-reveal inline-flex items-center gap-3 px-8 py-4 rounded-full bg-[#2b4eff] text-white font-bold text-lg sm:text-xl transition-all hover:scale-105 hover:bg-[#1a3ecc] hover:shadow-[0_10px_34px_rgba(43,78,255,0.35)] pointer-events-auto" href="/room">
+      Start a WebSLICE
+      <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+    </a>
   </div>
 </div>
-
 <main>
+
+
   <section id="how">
-    <div class="sec-kicker rv">WHAT IS SWARMLLM</div>
+    <div class="sec-kicker rv">WHAT IS WEBSLICE</div>
     <h2 class="rv">One model,<br>shared by the room.</h2>
-    <p class="lede rv">Big LLMs need more memory than any one device has. SwarmLLM lets a room of everyday devices share the load, and think as one.</p>
+    <p class="lede rv">Big LLMs need more memory than any one device has. WebSLICE lets a room of everyday devices share the load, and think as one.</p>
     <div class="how-grid">
       <div class="how-left rv">
         <div id="demo">
@@ -323,14 +375,14 @@
 
   <div class="endcta rv">
     <div class="big">Your devices are already a <em>supercomputer</em>.<br>Introduce them.</div>
-    <a class="cta" href="/room">start a swarm <span class="arrow">→</span></a>
+    <a class="cta" href="/room">start a WebSLICE <span class="arrow">→</span></a>
   </div>
 </main>
 
 <footer>
-  <span>swarm<b style="color:var(--accent)">LLM</b> · peer-to-peer inference in the browser</span>
+  <span>WebSLICE · peer-to-peer inference in the browser</span>
   <div class="spacer"></div>
-  <a class="gh" href="https://github.com/AllenJohnn/llm" target="_blank" rel="noopener" aria-label="SwarmLLM on GitHub"><svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span class="gh-label">source on GitHub · MIT</span></a>
+  <a class="gh" href="https://github.com/AllenJohnn/llm" target="_blank" rel="noopener" aria-label="WebSLICE on GitHub"><svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span class="gh-label">source on GitHub · MIT</span></a>
 </footer>
 
 <script>
@@ -590,5 +642,18 @@ new IntersectionObserver((es) => { if (es[0].isIntersecting && demoState === "id
 init();
 requestAnimationFrame(loop);
 </script>
+
+  <script>
+    if (typeof gsap !== 'undefined') {
+      gsap.from(".gsap-reveal", {
+        y: 40,
+        opacity: 0,
+        duration: 1,
+        stagger: 0.15,
+        ease: "power3.out",
+        delay: 0.2
+      });
+    }
+  </script>
 </body>
 </html>

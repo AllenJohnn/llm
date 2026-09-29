@@ -9,7 +9,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { MODELS, LOCAL_CANDIDATES } from "../room/models.js";
+import { MODELS, LOCAL_CANDIDATES, NEED_GB } from "../room/models.js";
 
 try {
   if (typeof process !== "undefined" && typeof process.loadEnvFile === "function") {
@@ -31,6 +31,7 @@ const TARGET_MAP = {
   "deepseek-r1-distill-qwen-14b": { dir: "r1-14b", file: "model.gguf", rootFile: "deepseek-r1-distill-qwen-14b.gguf" },
   "qwq-32b": { dir: "qwq32b", file: "model.gguf", rootFile: "qwq-32b.gguf" },
   "qwen3.8-27b": { dir: "q38", file: "model.gguf", rootFile: "qwen3.8-27b.gguf" },
+  "phi-4-mini": { dir: "phi4mini", file: "model.gguf", rootFile: "microsoft_Phi-4-mini-instruct-Q4_0.gguf" },
 };
 
 function formatBytes(bytes) {
@@ -45,14 +46,15 @@ function checkModelStatus(id) {
   if (!mapping) return { downloaded: false, size: 0, path: null };
   const targetPath = path.join(MODELS_DIR, mapping.dir, mapping.file);
   const rootPath = path.join(MODELS_DIR, mapping.rootFile);
+  const minimumBytes = ((NEED_GB[id] || 0.5) * 0.45) * 1024 ** 3;
 
   if (fs.existsSync(targetPath)) {
     const size = fs.statSync(targetPath).size;
-    if (size > 10 * 1024 * 1024) return { downloaded: true, size, path: targetPath };
+    if (size >= minimumBytes) return { downloaded: true, size, path: targetPath };
   }
   if (fs.existsSync(rootPath)) {
     const size = fs.statSync(rootPath).size;
-    if (size > 10 * 1024 * 1024) return { downloaded: true, size, path: rootPath };
+    if (size >= minimumBytes) return { downloaded: true, size, path: rootPath };
   }
   return { downloaded: false, size: 0, path: null };
 }
@@ -62,13 +64,9 @@ function listModels() {
   console.log("       SwarmLLM Model Catalog & Local Status          ");
   console.log("=======================================================\n");
 
-  const isFallbackMode = process.env.FALLBACKMODE === "true" || process.env.FALLBACKMODE === "1";
   for (const [id, m] of Object.entries(MODELS)) {
     const status = checkModelStatus(id);
-    let badge = status.downloaded ? `[\x1b[32mDOWNLOADED\x1b[0m] (${formatBytes(status.size)})` : "[\x1b[33mNOT DOWNLOADED\x1b[0m]";
-    if (id === "qwen3.8-27b" && isFallbackMode) {
-      badge = `[\x1b[35mGROQ CLOUD API DIRECT\x1b[0m] (no download required)`;
-    }
+    const badge = status.downloaded ? `[\x1b[32mDOWNLOADED\x1b[0m] (${formatBytes(status.size)})` : "[\x1b[33mNOT DOWNLOADED\x1b[0m]";
     console.log(` • \x1b[1m${id.padEnd(28)}\x1b[0m ${badge}`);
     console.log(`   Label: ${m.label} | Kind: ${m.kind}`);
     console.log(`   URL:   ${m.gguf || m.st}`);
@@ -85,90 +83,102 @@ async function downloadFileWithProgress(url, fallbackUrl, destPath) {
   fs.mkdirSync(path.dirname(destPath), { recursive: true });
 
   const tempPath = destPath + ".tmp";
-  let existingBytes = 0;
-  if (fs.existsSync(tempPath)) {
-    existingBytes = fs.statSync(tempPath).size;
-  }
+  const urls = [...new Set([url, fallbackUrl].filter(Boolean))];
+  let lastError;
 
-  let chosenUrl = url;
-  let response = null;
+  for (const targetUrl of urls) {
+    let existingBytes = fs.existsSync(tempPath) ? fs.statSync(tempPath).size : 0;
+    let response;
+    let fileStream;
+    let reader;
+    try {
+      const headers = existingBytes ? { Range: `bytes=${existingBytes}-` } : {};
+      response = await fetch(targetUrl, { headers, redirect: "follow" });
+      if (response.status === 416) {
+        const range = response.headers.get("content-range") || "";
+        const total = Number(range.match(/\/(\d+)$/)?.[1]);
+        if (total && total === existingBytes) {
+          fs.renameSync(tempPath, destPath);
+          console.log(`File already complete: ${destPath}`);
+          return;
+        }
+        fs.rmSync(tempPath, { force: true });
+        existingBytes = 0;
+        response = await fetch(targetUrl, { redirect: "follow" });
+      }
+      if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+      if (!response.body) throw new Error("The server returned an empty download.");
 
-  async function tryFetch(targetUrl) {
-    const headers = {};
-    if (existingBytes > 0) {
-      headers["Range"] = `bytes=${existingBytes}-`;
+      const isPartial = response.status === 206;
+      const contentRange = response.headers.get("content-range") || "";
+      const rangeStart = Number(contentRange.match(/^bytes (\d+)-/)?.[1]);
+      if (isPartial && (!existingBytes || rangeStart !== existingBytes)) {
+        fs.rmSync(tempPath, { force: true });
+        throw new Error("The server returned an invalid resume range; retry the download.");
+      }
+      // A server that ignores Range sends the complete file with 200; replace the partial file.
+      const append = isPartial;
+      const contentLength = Number(response.headers.get("content-length") || 0);
+      const rangeTotal = Number(contentRange.match(/\/(\d+)$/)?.[1] || 0);
+      const totalBytes = rangeTotal || (append ? existingBytes + contentLength : contentLength);
+      fileStream = fs.createWriteStream(tempPath, { flags: append ? "a" : "w" });
+      reader = response.body.getReader();
+      let receivedBytes = append ? existingBytes : 0;
+      let fileError = null;
+      const streamDone = new Promise((resolve) => {
+        fileStream.once("finish", resolve);
+        fileStream.once("error", (err) => { fileError = err; resolve(); });
+      });
+      const startTime = Date.now();
+      let lastLogged = 0;
+
+      process.stdout.write(`Downloading ${path.basename(destPath)}...\n`);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        if (!fileStream.write(Buffer.from(value))) {
+          await new Promise((resolve, reject) => {
+            fileStream.once("drain", resolve);
+            fileStream.once("error", reject);
+          });
+        }
+        receivedBytes += value.length;
+
+        const now = Date.now();
+        if (now - lastLogged > 200 || receivedBytes === totalBytes) {
+          lastLogged = now;
+          const elapsedSec = (now - startTime) / 1000 || 0.001;
+          const speed = (receivedBytes - (append ? existingBytes : 0)) / elapsedSec; // B/s
+          const pct = totalBytes > 0 ? ((receivedBytes / totalBytes) * 100).toFixed(1) : "?";
+          const etaSec = totalBytes > receivedBytes && speed > 0 ? Math.round((totalBytes - receivedBytes) / speed) : 0;
+
+          const barLen = 25;
+          const filled = totalBytes > 0 ? Math.min(barLen, Math.round((barLen * receivedBytes) / totalBytes)) : 0;
+          const bar = "█".repeat(filled) + "░".repeat(Math.max(0, barLen - filled));
+
+          process.stdout.write(`\r[${bar}] ${pct}% | ${formatBytes(receivedBytes)}/${formatBytes(totalBytes)} | ${formatBytes(speed)}/s | ETA: ${etaSec}s    `);
+        }
+      }
+
+      fileStream.end();
+      await streamDone;
+      if (fileError) throw fileError;
+      if (totalBytes && receivedBytes !== totalBytes) {
+        throw new Error(`Incomplete download: received ${receivedBytes} of ${totalBytes} bytes.`);
+      }
+      fs.renameSync(tempPath, destPath);
+      process.stdout.write(`\n✓ Finished ${path.basename(destPath)} (${formatBytes(receivedBytes)})\n`);
+      return;
+    } catch (err) {
+      try { await reader?.cancel(); } catch {}
+      try { fileStream?.destroy(); } catch {}
+      lastError = err;
+      console.warn(`\nDownload from ${targetUrl} failed: ${err.message}`);
     }
-    return fetch(targetUrl, { headers });
   }
-
-  try {
-    response = await tryFetch(chosenUrl);
-    if (!response.ok && fallbackUrl && response.status !== 416) {
-      console.log(`\nMirror returned HTTP ${response.status}. Falling back to official URL: ${fallbackUrl}`);
-      chosenUrl = fallbackUrl;
-      response = await tryFetch(chosenUrl);
-    }
-  } catch (err) {
-    if (fallbackUrl) {
-      console.log(`\nConnection error on ${chosenUrl}: ${err.message}. Trying fallback: ${fallbackUrl}`);
-      chosenUrl = fallbackUrl;
-      response = await tryFetch(chosenUrl);
-    } else {
-      throw err;
-    }
-  }
-
-  if (!response.ok && response.status !== 416) {
-    throw new Error(`Failed to download ${chosenUrl}: HTTP ${response.status} ${response.statusText}`);
-  }
-
-  if (response.status === 416) {
-    // Range not satisfiable, file already fully downloaded in tempPath
-    fs.renameSync(tempPath, destPath);
-    console.log(`File already downloaded: ${destPath}`);
-    return;
-  }
-
-  const isPartial = response.status === 206;
-  const contentLength = parseInt(response.headers.get("content-length") || "0", 10);
-  const totalBytes = isPartial ? existingBytes + contentLength : contentLength;
-
-  const fileStream = fs.createWriteStream(tempPath, { flags: isPartial ? "a" : "w" });
-  const reader = response.body.getReader();
-
-  let receivedBytes = isPartial ? existingBytes : 0;
-  let startTime = Date.now();
-  let lastLogged = 0;
-
-  process.stdout.write(`Downloading ${path.basename(destPath)}...\n`);
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    fileStream.write(Buffer.from(value));
-    receivedBytes += value.length;
-
-    const now = Date.now();
-    if (now - lastLogged > 200 || receivedBytes === totalBytes) {
-      lastLogged = now;
-      const elapsedSec = (now - startTime) / 1000 || 0.001;
-      const speed = (receivedBytes - (isPartial ? existingBytes : 0)) / elapsedSec; // B/s
-      const pct = totalBytes > 0 ? ((receivedBytes / totalBytes) * 100).toFixed(1) : "?";
-      const etaSec = totalBytes > receivedBytes && speed > 0 ? Math.round((totalBytes - receivedBytes) / speed) : 0;
-
-      const barLen = 25;
-      const filled = totalBytes > 0 ? Math.round((barLen * receivedBytes) / totalBytes) : 0;
-      const bar = "█".repeat(filled) + "░".repeat(Math.max(0, barLen - filled));
-
-      process.stdout.write(`\r[${bar}] ${pct}% | ${formatBytes(receivedBytes)}/${formatBytes(totalBytes)} | ${formatBytes(speed)}/s | ETA: ${etaSec}s    `);
-    }
-  }
-
-  fileStream.end();
-  await new Promise((resolve) => fileStream.on("finish", resolve));
-  fs.renameSync(tempPath, destPath);
-  process.stdout.write(`\n✓ Finished ${path.basename(destPath)} (${formatBytes(receivedBytes)})\n`);
+  throw new Error(`Unable to download ${path.basename(destPath)}. ${lastError?.message || "No source URL is available."}`);
 }
 
 async function downloadModel(id) {
@@ -178,17 +188,11 @@ async function downloadModel(id) {
     return false;
   }
 
-  const isFallbackMode = process.env.FALLBACKMODE === "true" || process.env.FALLBACKMODE === "1";
-  if (id === "qwen3.8-27b" && isFallbackMode) {
-    console.log(`\n======================================================`);
-    console.log(`Preparing Model: ${m.label} (${id})`);
-    console.log(`======================================================`);
-    console.log(`⚡ FALLBACK MODE ACTIVE: Skipping 16.5 GB download!`);
-    console.log(`   Using Groq API directly with Qwen 27B model (qwen/qwen3.8-27b).`);
-    return true;
-  }
-
   const map = TARGET_MAP[id];
+  if (!map) {
+    console.error(`Error: Model "${id}" does not have a downloadable local package.`);
+    return false;
+  }
   console.log(`\n======================================================`);
   console.log(`Preparing Model: ${m.label} (${id})`);
   console.log(`======================================================`);
@@ -200,11 +204,16 @@ async function downloadModel(id) {
   const rootWeight = path.join(MODELS_DIR, map.rootFile);
 
   // 1. Download weights
-  if (fs.existsSync(destWeight)) {
-    console.log(`Weights already present: ${destWeight} (${formatBytes(fs.statSync(destWeight).size)})`);
-  } else if (fs.existsSync(rootWeight)) {
-    console.log(`Weights already present: ${rootWeight} (${formatBytes(fs.statSync(rootWeight).size)})`);
+  const existing = checkModelStatus(id);
+  if (existing.downloaded) {
+    console.log(`Weights already present: ${existing.path} (${formatBytes(existing.size)})`);
   } else {
+    for (const file of [destWeight, rootWeight]) {
+      if (fs.existsSync(file)) {
+        console.warn(`Removing incomplete model file: ${file}`);
+        fs.rmSync(file, { force: true });
+      }
+    }
     await downloadFileWithProgress(primaryWeightUrl, fallbackWeightUrl, destWeight);
   }
 
@@ -278,7 +287,7 @@ async function main() {
   }
 
   if (arg === "all") {
-    console.log("Starting full download of all 10 models...");
+    console.log(`Starting full download of all ${Object.keys(MODELS).length} models...`);
     for (const id of Object.keys(MODELS)) {
       await downloadModel(id);
     }

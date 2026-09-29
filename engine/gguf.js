@@ -630,7 +630,7 @@ export function validateRangeResponse(r, expectedOffset, expectedLength, tensorN
   if (!r.ok && r.status !== 206) {
     throw new Error(`range fetch failed for ${tensorName || "tensor"} (HTTP ${r.status})`);
   }
-  const clHeader = r.headers?.get?.("content-length") || r.headers?.get?.("x-swarm-len");
+  const clHeader = r.headers?.get?.("content-length") || r.headers?.get?.("x-webslice-len");
   // If server returns HTTP 200 for a partial range (expectedOffset > 0), it ignored the Range header UNLESS it's a slice of exact expectedLength
   if (r.status === 200 && expectedOffset > 0) {
     if (clHeader && parseInt(clHeader, 10) !== expectedLength) {
@@ -743,7 +743,7 @@ export async function streamEntryToGPU(device, info, openRange, { pace = 0, stag
         onProgress(-attemptReported);
       }
       if (attempt < maxRetries) {
-        console.warn(`[SwarmLLM] Range stream attempt ${attempt + 1} failed for ${info.name}: ${err.message}. Retrying...`);
+        console.warn(`[webslice] Range stream attempt ${attempt + 1} failed for ${info.name}: ${err.message}. Retrying...`);
       }
     }
   }

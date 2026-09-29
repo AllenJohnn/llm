@@ -1,4 +1,4 @@
-// SwarmLLM layer allocation and memory pledge planner
+// webslice layer allocation and memory pledge planner
 // Handles capacity calculations, layer slicing, zero-layer prevention, and layer range string formatting.
 
 export function pledgeOf(m) {

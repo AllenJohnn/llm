@@ -1,4 +1,4 @@
-// Ant Design X-inspired streaming Markdown renderer for SwarmLLM.
+// Ant Design X-inspired streaming Markdown renderer for webslice.
 import { marked } from "../vendor/marked.esm.js";
 
 export function esc(s) {

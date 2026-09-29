@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import groqHandler from "../api/groq.js";
+import configHandler from "../api/config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -87,6 +88,14 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ error: { message: err.message } }));
       }
     }
+    return;
+  }
+
+  if (pathname === "/api/config") {
+    const config = await configHandler();
+    res.statusCode = config.status;
+    for (const [name, value] of config.headers) res.setHeader(name, value);
+    res.end(await config.text());
     return;
   }
 

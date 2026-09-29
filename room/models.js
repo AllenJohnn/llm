@@ -9,6 +9,9 @@ export const NEED_GB = {
   "deepseek-r1-distill-qwen-14b": 9.5,
   "qwq-32b": 21.0,
   "qwen3.8-27b": 16.5,
+  "phi-4-mini": 3.0,
+  "smollm-135m": 0.3,
+  "smollm-135m": 0.3,
 };
 
 // Mapping from room model keys to Groq-hosted model IDs
@@ -63,6 +66,14 @@ export const MODELS = {
     ggufFallback: "https://hf-mirror.com/bartowski/Qwen_QwQ-32B-GGUF/resolve/main/Qwen_QwQ-32B-Q4_0.gguf",
     cfg: "https://huggingface.co/Qwen/QwQ-32B/resolve/main/config.json",
     tok: "https://huggingface.co/Qwen/QwQ-32B/resolve/main/tokenizer.json" },
+  "phi-4-mini": { label: "Phi-4 mini · Q4", kind: "gguf", arch: "phi3", thinking: false,
+    gguf: "https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_0.gguf",
+    ggufFallback: "https://hf-mirror.com/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_0.gguf",
+    cfg: "https://huggingface.co/microsoft/Phi-4-mini-instruct/resolve/main/config.json" },
+  "smollm-135m": { label: "SmolLM 135M · bf16", kind: "st", thinking: false,
+    st: "https://huggingface.co/HuggingFaceTB/SmolLM-135M-Instruct/resolve/main/model.safetensors",
+    cfg: "https://huggingface.co/HuggingFaceTB/SmolLM-135M-Instruct/resolve/main/config.json",
+    tok: "https://huggingface.co/HuggingFaceTB/SmolLM-135M-Instruct/resolve/main/tokenizer.json" },
   "qwen3.8-27b": { label: "Qwen 3.8 27B · Q4", kind: "qwen35", thinking: true,
     gguf: "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-Q4_0.gguf",
     ggufFallback: "https://hf-mirror.com/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-Q4_0.gguf" },
@@ -85,7 +96,9 @@ export const LOCAL_CANDIDATES = {
   "qwen2.5-coder-7b": ["/models/qwen25coder/model.gguf", "/models/qwen2.5-coder-7b.gguf", "/models/Qwen2.5-Coder-7B-Instruct-Q4_0.gguf", "/models/qwen7b/model.gguf"],
   "deepseek-r1-distill-qwen-14b": ["/models/deepseek-r1-distill-qwen-14b.gguf", "/models/DeepSeek-R1-Distill-Qwen-14B-Q4_0.gguf", "/models/r1-14b/model.gguf"],
   "qwq-32b": ["/models/qwq-32b.gguf", "/models/Qwen_QwQ-32B-Q4_0.gguf", "/models/qwq32b/model.gguf"],
+  "phi-4-mini": ["/models/phi4mini/model.gguf", "/models/microsoft_Phi-4-mini-instruct-Q4_0.gguf", "/models/Phi-4-mini-instruct-Q4_0.gguf", "/models/phi-4-mini-instruct-Q4_0.gguf", "/models/phi-4-mini.gguf"],
   "qwen3.8-27b": ["/models/qwen3.8-27b.gguf", "/models/Qwen3.8-27B-Q4_0.gguf", "/models/q38/model.gguf"],
+  "smollm-135m": ["/models/smollm-135m.safetensors", "/models/model.safetensors", "/models/model/model.safetensors"],
 };
 
 export async function detectLocalModel(modelKey) {
@@ -105,11 +118,11 @@ export async function detectLocalModel(modelKey) {
         if (cl) {
           const size = parseInt(cl, 10);
           if (size < expectedMinBytes) {
-            console.warn(`[SwarmLLM] Local model file ${p} is incomplete (${(size / 2 ** 30).toFixed(2)} GB < ${(expectedMinBytes / 2 ** 30).toFixed(2)} GB). Skipping.`);
+            console.warn(`[webslice] Local model file ${p} is incomplete (${(size / 2 ** 30).toFixed(2)} GB < ${(expectedMinBytes / 2 ** 30).toFixed(2)} GB). Skipping.`);
             continue;
           }
         }
-        console.log(`[SwarmLLM] Using local model file: ${p}`);
+        console.log(`[webslice] Using local model file: ${p}`);
         if (m.gguf) m.gguf = p;
         if (m.st) m.st = p;
         const dir = p.substring(0, p.lastIndexOf("/") + 1);
@@ -127,3 +140,5 @@ export async function detectLocalModel(modelKey) {
   }
   return null;
 }
+
+

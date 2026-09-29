@@ -1,7 +1,7 @@
 {
-  "name": "swarmllm",
+  "name": "webslice",
   "version": "0.2.0",
-  "description": "Peer-to-peer LLM inference across browser tabs: a from-scratch WebGPU engine and a WebRTC runtime that split one model over the devices in a room.",
+  "description": "WebGPU-accelerated Sharded LLM Inference across Compute-constrained Edge devices.",
   "homepage": "https://swarmllm.ai",
   "repository": {
     "type": "git",
