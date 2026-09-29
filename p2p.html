@@ -707,7 +707,7 @@ window.swarmStart = function(create) {
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
   }
   .think-mode-btn.active svg { color: var(--accent); }
-  .fallback-mode-btn {
+  .fallback-mode-btn { display: none !important;
     border: 1px solid var(--border); background: var(--panel-2); padding: 3px 9px; border-radius: 8px;
     font-family: var(--mono); font-size: 10.5px; color: var(--muted);
     display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
@@ -720,7 +720,7 @@ window.swarmStart = function(create) {
   }
   .fallback-mode-btn.active svg { stroke: #db2777; color: #db2777; }
 
-  .sidebar-fallback-card {
+  .sidebar-fallback-card { display: none !important;
     display: flex; flex-direction: column; gap: 5px;
     background: color-mix(in srgb, var(--panel-2) 80%, transparent);
     border: 1px solid var(--border); border-radius: 10px;
@@ -935,7 +935,7 @@ window.swarmStart = function(create) {
     <div id="ai-panel">
       <div class="side-k" style="display:flex;align-items:center;justify-content:space-between;width:100%;">
         <span>MODEL</span>
-        <span class="model-groq-badge" id="model-groq-badge" style="font-size:10px; font-weight:600; text-transform:none; color:var(--accent, #10b981); background:rgba(16,185,129,0.12); padding:2px 7px; border-radius:4px; letter-spacing:0.02em;">via Groq</span>
+        <span class="model-groq-badge" id="model-groq-badge" style="display: none !important;" style="font-size:10px; font-weight:600; text-transform:none; color:var(--accent, #10b981); background:rgba(16,185,129,0.12); padding:2px 7px; border-radius:4px; letter-spacing:0.02em;">via Groq</span>
       </div>
       <div id="ai-head">
       <span id="ai-title">SWARM MODEL</span>
@@ -947,9 +947,7 @@ window.swarmStart = function(create) {
         <option value="qwen2.5-coder-7b">Qwen2.5 Coder 7B · Q4 (Code &amp; Web)</option>
         <option value="deepseek-r1-distill-qwen-14b">DeepSeek-R1 Distill Qwen 14B · Q4 (Reasoning)</option>
         <option value="qwq-32b">Qwen QwQ 32B · Q4 (Deep Reasoning)</option>
-        <option value="phi-4-mini">Phi-4 mini · Q4 (coding &amp; reasoning)</option>
         <option value="qwen3.8-27b">Qwen 3.8 27B · Q4</option>
-        <option value="smollm-135m">SmolLM 135M · bf16 (Fast Test · 270 MB)</option>
       </select>
       <div class="sidebar-fallback-card" id="sidebar-fallback-card" title="Toggle Groq Cloud API Mode (0 GB download, instant responses via Groq)">
         <div class="sfc-header">

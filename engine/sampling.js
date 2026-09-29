@@ -1,6 +1,13 @@
 // Sampling helpers.
 
-export function argmax(a) {
+export function argmax(a, chain = null, penalty = 1.0) {
+  if (chain && penalty !== 1.0) {
+    for (let i = Math.max(0, chain.length - 64); i < chain.length; i++) {
+      const id = chain[i];
+      if (a[id] > 0) a[id] /= penalty;
+      else a[id] *= penalty;
+    }
+  }
   let bi = 0;
   for (let i = 1; i < a.length; i++) if (a[i] > a[bi]) bi = i;
   return bi;

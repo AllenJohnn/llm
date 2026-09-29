@@ -18,17 +18,9 @@ import { streamGroqChat, completeGroqChat, formatGroqError, GROQ_PROXY_URL } fro
 import { perfSidebar } from "./room/perf-sidebar.js";
 
 // Groq mode: By default, text generation is routed through Groq proxy endpoint for all models.
-// The user can toggle this off via the "Groq Mode" toggle in the UI, which persists via localStorage.
-var isGroqMode = (typeof window !== "undefined" && (
-  new URLSearchParams(window.location?.search).get("engine") === "webgpu"
-)) ? false : (function() {
-  try {
-    const stored = typeof localStorage !== "undefined" && localStorage.getItem("swarm_fallbackmode");
-    if (stored === "false") return false;
-  } catch {}
-  return true;
-})();
-var fallbackmode = isGroqMode;
+// The user can toggle this off via the "Cloud Mode" toggle in the UI, which persists via localStorage.
+var isGroqMode = true;
+var fallbackmode = true;
 if (typeof window !== "undefined") {
   window.isGroqMode = isGroqMode;
   window.fallbackmode = fallbackmode;
@@ -358,7 +350,7 @@ function updateNeed(pledged) {
   const model = $("ai-model")?.value || "qwen3.8-27b";
   if (isGroqMode) {
     if ($("need-fill")) $("need-fill").style.width = "100%";
-    if ($("need-text")) $("need-text").textContent = "via Groq · 0 GB download needed";
+    if ($("need-text")) $("need-text").textContent = " ";
     if ($("ai-need")) $("ai-need").classList.add("ok");
     if ($("ai-start") && !ai.busy) $("ai-start").disabled = false;
     return;
@@ -383,7 +375,7 @@ $("ai-model").addEventListener("change", () => {
   ai.model = model;
   if (isGroqMode) {
     const mLabel = MODELS[model]?.label?.split("·")[0]?.trim() || model;
-    aiStatus(`ready · ${mLabel} (via Groq)`);
+    aiStatus(`ready · ${mLabel}`);
   }
   updateCluster();
 });
@@ -459,7 +451,7 @@ function enterRoom() {
     $("ai-panel").classList.add("groq-mode");
     $("ai-panel").classList.add("online");
     const mLabel = MODELS[m]?.label?.split("·")[0]?.trim() || m;
-    aiStatus(`ready · ${mLabel} (via Groq)`);
+    aiStatus(`ready · ${mLabel}`);
     renderWelcomePrompts();
     if ($("model-groq-badge")) $("model-groq-badge").style.display = "inline-block";
   }
@@ -1016,7 +1008,7 @@ async function rangeFetch(url, lo, hi, noCache = false) {
 }
 async function fetchGGUFHeader(url, needTokenizer = true) {
   if (fallbackmode || (url && url.includes("Qwen3.8-27B"))) {
-    console.warn("[FallbackMode] Bypassing fetchGGUFHeader for 27B model (using Groq Cloud API directly)");
+    console.warn("[FallbackMode] Bypassing fetchGGUFHeader for 27B model (using Cloud API API directly)");
     return { meta: { "qwen35.block_count": 64, "qwen35.nextn_predict_layers": 0 }, tensors: {} };
   }
   let size = 12 * 2 ** 20;
@@ -1670,9 +1662,9 @@ async function aiStart(modelArg) {
     if ($("ai-model")) $("ai-model").disabled = false;
     renderWelcomePrompts();
     const mLabel = MODELS[modelKey]?.label?.split("·")[0]?.trim() || modelKey;
-    aiStatus(`ready · ${mLabel} (via Groq)`);
-    mascot(`Room ready with ${mLabel} (via Groq). Anyone in the room can ask a question!`);
-    toast(`⚡ Model ready: ${mLabel} (via Groq)`);
+    aiStatus(`ready · ${mLabel}`);
+    mascot(`Room ready with ${mLabel}. Anyone in the room can ask a question!`);
+    toast(`⚡ Model ready: ${mLabel}`);
     broadcastAll({ t: "ai-ready-all", groq: true, model: modelKey });
     return;
   }
@@ -1898,8 +1890,8 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
       sendChat({ t: "ai-genstart", name: asker, text, model: mLabel }, askerId);
       perfSidebar.onGenStart({ model: mLabel });
     }
-    mascot(`Routing prompt to ${mLabel} (via Groq)…`);
-    aiStatus(`streaming from ${mLabel} (via Groq)…`);
+    mascot(`Routing prompt to ${mLabel}…`);
+    aiStatus(`streaming from ${mLabel}…`);
 
     const controller = new AbortController();
     ai.abortController = controller;
@@ -1934,7 +1926,7 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
         sendChat({ t: "ai-token", text: token }, askerId);
         perfSidebar.onToken(token, (continuation.priorCount || 0) + tokenCount);
         const elapsed = (performance.now() - t0) / 1000;
-        aiStatus(`streaming… ${tokenCount} tok · ${(tokenCount / (elapsed || 0.001)).toFixed(1)} tok/s · ${mLabel} (via Groq)`);
+        aiStatus(`streaming… ${tokenCount} tok · ${(tokenCount / (elapsed || 0.001)).toFixed(1)} tok/s · ${mLabel}`);
       }
 
       const secs = (performance.now() - t0) / 1000;
@@ -1956,11 +1948,11 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
       } else {
         const totalCount = (continuation.priorCount || 0) + tokenCount;
         const totalSecs = (continuation.priorSecs || 0) + secs;
-        const stats = `${totalCount} tok · ${(totalCount / (totalSecs || 0.001)).toFixed(1)} tok/s · ${mLabel} (via Groq)${wasAborted ? " · stopped by user" : wasCapped ? " · stopped: token limit reached" : ""}`;
+        const stats = `${totalCount} tok · ${(totalCount / (totalSecs || 0.001)).toFixed(1)} tok/s · ${mLabel}${wasAborted ? " · stopped by user" : wasCapped ? " · stopped: token limit reached" : ""}`;
         chatBotEnd(reply, stats, wasCapped && !wasAborted);
         sendChat({ t: "ai-gendone", stats, capped: wasCapped && !wasAborted }, askerId);
         perfSidebar.onGenDone({ totalTokens: totalCount, totalSecs, stats });
-        mascot(wasAborted ? "Generation stopped." : wasCapped ? "Token limit reached. Click Continue or ask to proceed." : `Done. Answered by ${mLabel} (via Groq).`);
+        mascot(wasAborted ? "Generation stopped." : wasCapped ? "Token limit reached. Click Continue or ask to proceed." : `Done. Answered by ${mLabel}.`);
         aiStatus(`ready — ${stats}`);
         if (reply && !wasAborted) {
           ai.history.push({ role: "assistant", content: reply });
@@ -1968,18 +1960,18 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
       }
     } catch (err) {
       if (ai.abortGen) {
-        const stats = `${tokenCount} tok · stopped by user · ${mLabel} (via Groq)`;
+        const stats = `${tokenCount} tok · stopped by user · ${mLabel}`;
         chatBotEnd(reply, stats, false);
         sendChat({ t: "ai-gendone", stats, capped: false }, askerId);
         perfSidebar.onGenDone({ totalTokens: tokenCount, totalSecs: (performance.now() - t0) / 1000, stats });
         aiStatus(`stopped — ${stats}`);
       } else {
         console.error("[Groq] Generation error:", err);
-        aiStatus("Groq error: " + err.message);
-        chatBotEnd((continuation.prefixReply || "") + `\n\n⚠ **Groq Error**: ${err.message}`, "");
+        aiStatus("Cloud error: " + err.message);
+        chatBotEnd((continuation.prefixReply || "") + `\n\n⚠ **Cloud Error**: ${err.message}`, "");
         sendChat({ t: "ai-gendone", stats: "failed: " + err.message }, askerId);
         perfSidebar.onGenDone({ totalTokens: tokenCount, totalSecs: (performance.now() - t0) / 1000, stats: "failed: " + err.message });
-        toast(`Groq error: ${err.message}`);
+        toast(`Cloud error: ${err.message}`);
       }
     } finally {
       ai.busy = false;
@@ -2015,11 +2007,11 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
   const imStart = V[isPhi ? "<|user|>" : "<|im_start|>"], imEnd = V[isPhi ? "<|end|>" : "<|im_end|>"], eot = V["<|endoftext|>"];
   const ids = isPhi
     ? [imStart, ...ai.tok.encode("\n" + text), imEnd, ...ai.tok.encode("\n"), V["<|assistant|>"], ...ai.tok.encode("\n")]
-    : [imStart, ...ai.tok.encode("user\n" + text), imEnd, ...ai.tok.encode("\n"), imStart, ...ai.tok.encode("assistant\n")];
+    : [imStart, ...ai.tok.encode("system\nYou are a helpful assistant."), imEnd, ...ai.tok.encode("\n"), imStart, ...ai.tok.encode("user\n" + text), imEnd, ...ai.tok.encode("\n"), imStart, ...ai.tok.encode("assistant\n")];
   // Fast Mode (default): pre-close the think block so Qwen3 skips the 100+ token monologue and generates the answer immediately!
   const isThinkingModel = MODELS[ai.model]?.thinking || (ai.model && ai.model.includes("qwen3"));
   const wantThinking = ai.thinkingMode === "deep";
-  if (isThinkingModel && !wantThinking && ai.model !== "qwen3-0.6b") {
+  if (isThinkingModel && !wantThinking) {
     if (V["<think>"] !== undefined && V["</think>"] !== undefined) {
       ids.push(V["<think>"], ...ai.tok.encode("\n\n"), V["</think>"], ...ai.tok.encode("\n\n"));
     } else {
@@ -2328,7 +2320,7 @@ async function aiOnData(from, d) {
         $("ai-row").style.display = "flex";
         $("ai-empty").style.display = "none";
         renderWelcomePrompts();
-        aiStatus("ready · Groq Cloud (Qwen 27B) — no download needed");
+        aiStatus("ready · Cloud API (Qwen 27B) — no download needed");
         sendTo(ai.hostId, { t: "ai-ready", from: peer.id });
         break;
       }
@@ -2532,8 +2524,8 @@ async function aiOnData(from, d) {
       $("ai-empty").style.display = "none";
       if (d.groq || isGroqMode) {
         const mLabel = MODELS[ai.model]?.label?.split("·")[0]?.trim() || ai.model || "Model";
-        aiStatus(`ready · ${mLabel} (via Groq)`);
-        mascot(`${mLabel} is online via Groq! Anyone can ask a question.`);
+        aiStatus(`ready · ${mLabel}`);
+        mascot(`${mLabel} is online ! Anyone can ask a question.`);
       } else {
         $("ai-empty").style.display = "";
         aiStatus(`cluster online · serving ${formatLayerRange(ai.range, ai.role === "host")}`);
@@ -2640,7 +2632,7 @@ function updateFallbackModeUI(enabled) {
     btn.classList.toggle("active", enabled);
     const label = btn.querySelector(".fallback-label");
     if (label) {
-      label.textContent = enabled ? "Groq (On)" : "Groq";
+      label.textContent = enabled ? "Cloud (On)" : "Groq";
     }
   }
 
@@ -2655,7 +2647,7 @@ function updateFallbackModeUI(enabled) {
   const sfcDesc = $("sfc-desc");
   if (sfcDesc) {
     sfcDesc.textContent = enabled
-      ? "⚡ Active · Groq API (0 GB download)"
+      ? "⚡ Active · Cloud API (0 GB download)"
       : "Disabled · using local WebGPU swarm";
   }
 }
@@ -2671,7 +2663,7 @@ function toggleFallbackMode(forceState) {
     } catch {}
   }
   if ($("model-groq-badge")) {
-    $("model-groq-badge").style.display = isGroqMode ? "inline-block" : "none";
+    $("model-groq-badge").style.display = "none";
   }
   updateFallbackModeUI(fallbackmode);
   if (fallbackmode) {
@@ -2688,9 +2680,9 @@ function toggleFallbackMode(forceState) {
     updateNeed(0);
     const m = $("ai-model")?.value || "qwen3.8-27b";
     const mLabel = MODELS[m]?.label?.split("·")[0]?.trim() || m;
-    toast(`⚡ Groq Mode ENABLED: using ${mLabel} (via Groq)`);
-    aiStatus(`Groq mode active · ${mLabel} (via Groq) · 0 GB download needed`);
-    mascot(`Groq mode active! Streaming directly from ${mLabel} (via Groq) without model download.`);
+    toast(`⚡ Cloud Mode ENABLED: using ${mLabel}`);
+    aiStatus(`Cloud mode active · ${mLabel} `);
+    mascot(`Cloud mode active! Streaming directly from ${mLabel} without model download.`);
   } else {
     if ($("ai-panel")) $("ai-panel").classList.remove("groq-mode");
     if (!ai.engine) {
@@ -2704,7 +2696,7 @@ function toggleFallbackMode(forceState) {
     if ($("ai-start")) $("ai-start").style.display = "";
     if ($("ai-need")) $("ai-need").style.display = "";
     updateCluster();
-    toast("Groq Mode DISABLED: using WebGPU Swarm");
+    toast("Cloud Mode DISABLED: using WebGPU Swarm");
     aiStatus(ai.engine ? `cluster online · serving ${formatLayerRange(ai.range, ai.role === "host")}` : "split across every device in the room");
     mascot("Swarm WebGPU mode active. Pick a model and press Start to download weights.");
   }
@@ -2713,7 +2705,7 @@ function toggleFallbackMode(forceState) {
 function setupFallbackModeToggle() {
   updateFallbackModeUI(fallbackmode);
   if ($("model-groq-badge")) {
-    $("model-groq-badge").style.display = isGroqMode ? "inline-block" : "none";
+    $("model-groq-badge").style.display = "none";
   }
   const btn = $("mode-fallback");
   if (btn) {

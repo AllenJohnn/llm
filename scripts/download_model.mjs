@@ -2,8 +2,8 @@
 // Downloads and sets up model weights, config, and tokenizer for offline & local demonstration.
 // Usage:
 //   node scripts/download_model.mjs list
-//   node scripts/download_model.mjs <model-id>  (e.g. smollm-135m, qwen3-0.6b, qwen2.5-coder-7b)
-//   node scripts/download_model.mjs demo        (downloads smollm-135m & qwen3-0.6b for instant local demo)
+//   node scripts/download_model.mjs <model-id>  (e.g. qwen3-0.6b, qwen2.5-coder-7b)
+//   node scripts/download_model.mjs demo        (downloads qwen3-0.6b for instant local demo)
 //   node scripts/download_model.mjs all
 
 import fs from "fs";
@@ -23,7 +23,6 @@ const MODELS_DIR = path.join(ROOT, "models");
 
 // Catalog directory mapping for primary engine layout (docs/models.md)
 const TARGET_MAP = {
-  "smollm-135m": { dir: "model", file: "model.safetensors", rootFile: "smollm-135m.safetensors" },
   "qwen3-0.6b": { dir: "qwen", file: "model.gguf", rootFile: "qwen3-0.6b.gguf" },
   "qwen3-1.7b": { dir: "qwen17", file: "model.gguf", rootFile: "qwen3-1.7b.gguf" },
   "qwen3-4b": { dir: "qwen4", file: "model.gguf", rootFile: "qwen3-4b.gguf" },
@@ -31,7 +30,6 @@ const TARGET_MAP = {
   "qwen2.5-coder-7b": { dir: "qwen25coder", file: "model.gguf", rootFile: "qwen2.5-coder-7b.gguf" },
   "deepseek-r1-distill-qwen-14b": { dir: "r1-14b", file: "model.gguf", rootFile: "deepseek-r1-distill-qwen-14b.gguf" },
   "qwq-32b": { dir: "qwq32b", file: "model.gguf", rootFile: "qwq-32b.gguf" },
-  "phi-4-mini": { dir: "phi4", file: "model.gguf", rootFile: "phi-4-mini.gguf" },
   "qwen3.8-27b": { dir: "q38", file: "model.gguf", rootFile: "qwen3.8-27b.gguf" },
 };
 
@@ -78,7 +76,7 @@ function listModels() {
   }
 
   console.log("Commands to download:");
-  console.log("  node scripts/download_model.mjs demo       # Downloads SmolLM2-135M & Qwen3-0.6B (fastest)");
+  console.log("  node scripts/download_model.mjs demo       # Downloads Qwen3-0.6B (fastest)");
   console.log("  node scripts/download_model.mjs <model-id> # Downloads specific model");
   console.log("  node scripts/download_model.mjs all        # Downloads all models\n");
 }
@@ -274,8 +272,7 @@ async function main() {
   }
 
   if (arg === "demo" || arg === "quick") {
-    console.log("Starting quick demo download: SmolLM2-135M & Qwen3-0.6B...");
-    await downloadModel("smollm-135m");
+    console.log("Starting quick demo download: Qwen3-0.6B...");
     await downloadModel("qwen3-0.6b");
     return;
   }
