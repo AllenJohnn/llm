@@ -1888,7 +1888,7 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
       chatUser(asker, text);
       chatBotStart();
       sendChat({ t: "ai-genstart", name: asker, text, model: mLabel }, askerId);
-      perfSidebar.onGenStart({ model: mLabel });
+      perfSidebar?.onGenStart?.({ model: mLabel });
     }
     mascot(`Routing prompt to ${mLabel}…`);
     aiStatus(`streaming from ${mLabel}…`);
@@ -1924,7 +1924,7 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
         reply += token;
         chatBotUpdate(reply);
         sendChat({ t: "ai-token", text: token }, askerId);
-        perfSidebar.onToken(token, (continuation.priorCount || 0) + tokenCount);
+        perfSidebar?.onToken?.(token, (continuation.priorCount || 0) + tokenCount);
         const elapsed = (performance.now() - t0) / 1000;
         aiStatus(`streaming… ${tokenCount} tok · ${(tokenCount / (elapsed || 0.001)).toFixed(1)} tok/s · ${mLabel}`);
       }
@@ -1951,7 +1951,7 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
         const stats = `${totalCount} tok · ${(totalCount / (totalSecs || 0.001)).toFixed(1)} tok/s · ${mLabel}${wasAborted ? " · stopped by user" : wasCapped ? " · stopped: token limit reached" : ""}`;
         chatBotEnd(reply, stats, wasCapped && !wasAborted);
         sendChat({ t: "ai-gendone", stats, capped: wasCapped && !wasAborted }, askerId);
-        perfSidebar.onGenDone({ totalTokens: totalCount, totalSecs, stats });
+        perfSidebar?.onGenDone?.({ totalTokens: totalCount, totalSecs, stats });
         mascot(wasAborted ? "Generation stopped." : wasCapped ? "Token limit reached. Click Continue or ask to proceed." : `Done. Answered by ${mLabel}.`);
         aiStatus(`ready — ${stats}`);
         if (reply && !wasAborted) {
@@ -1963,14 +1963,14 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
         const stats = `${tokenCount} tok · stopped by user · ${mLabel}`;
         chatBotEnd(reply, stats, false);
         sendChat({ t: "ai-gendone", stats, capped: false }, askerId);
-        perfSidebar.onGenDone({ totalTokens: tokenCount, totalSecs: (performance.now() - t0) / 1000, stats });
+        perfSidebar?.onGenDone?.({ totalTokens: tokenCount, totalSecs: (performance.now() - t0) / 1000, stats });
         aiStatus(`stopped — ${stats}`);
       } else {
         console.error("[Groq] Generation error:", err);
         aiStatus("Cloud error: " + err.message);
         chatBotEnd((continuation.prefixReply || "") + `\n\n⚠ **Cloud Error**: ${err.message}`, "");
         sendChat({ t: "ai-gendone", stats: "failed: " + err.message }, askerId);
-        perfSidebar.onGenDone({ totalTokens: tokenCount, totalSecs: (performance.now() - t0) / 1000, stats: "failed: " + err.message });
+        perfSidebar?.onGenDone?.({ totalTokens: tokenCount, totalSecs: (performance.now() - t0) / 1000, stats: "failed: " + err.message });
         toast(`Cloud error: ${err.message}`);
       }
     } finally {
@@ -2030,7 +2030,7 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
     chatBotStart();
     const modelLabel = MODELS[ai.model]?.label?.split("·")[0]?.trim() || ai.model;
     sendChat({ t: "ai-genstart", name: asker, text, model: modelLabel }, askerId);
-    perfSidebar.onGenStart({ model: modelLabel });
+    perfSidebar?.onGenStart?.({ model: modelLabel });
   }
   mascot("Thinking… every word is taking a lap through the room.");
   aiStatus(`prefill: ${ids.length} tokens…`);
@@ -2111,7 +2111,7 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
       count++;
       chatBotUpdate(reply);
       sendChat({ t: "ai-token", text: piece }, askerId);
-      perfSidebar.onToken(piece, (continuation.priorCount || 0) + count);
+      perfSidebar?.onToken?.(piece, (continuation.priorCount || 0) + count);
       aiStatus(`generating… ${count} tok · ${(count / ((performance.now() - t0) / 1000)).toFixed(1)} tok/s`);
     };
     const recentTokens = [];
@@ -2236,7 +2236,7 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
       const stats = `${totalCount} tok · ${(totalCount / (totalSecs || 0.001)).toFixed(1)} tok/s · ${ai.chain.length + 1} devices${wasAborted ? " · stopped by user" : capped ? ` · stopped: context limit reached (${MAX_SEQ} tokens)` : ""}`;
       chatBotEnd(reply, stats, capped && !wasAborted);
       sendChat({ t: "ai-gendone", stats, capped: capped && !wasAborted }, askerId);
-      perfSidebar.onGenDone({ totalTokens: totalCount, totalSecs, stats });
+      perfSidebar?.onGenDone?.({ totalTokens: totalCount, totalSecs, stats });
       mascot(wasAborted ? "Generation stopped." : capped ? "Context limit reached. Ask to continue or start a new question." : "Done. Anyone in the room can ask the next one.");
       aiStatus(`ready — prefill ${((t0 - tPre) / 1000).toFixed(1)}s, ${stats}`);
     }
@@ -2244,7 +2244,7 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
     aiStatus("generation failed: " + err.message);
     chatBotEnd((continuation.prefixReply || "") + "\n\n⚠ " + err.message, "");
     sendChat({ t: "ai-gendone", stats: "failed: " + err.message }, askerId);   // unlock everyone's send box
-    perfSidebar.onGenDone({ totalTokens: count, totalSecs: (performance.now() - t0) / 1000, stats: "failed: " + err.message });
+    perfSidebar?.onGenDone?.({ totalTokens: count, totalSecs: (performance.now() - t0) / 1000, stats: "failed: " + err.message });
   } finally {
     ai.busy = false;
     ai.abortGen = false;
@@ -2494,18 +2494,18 @@ async function aiOnData(from, d) {
       chatBotStart();
       setSendButtonState("stop");
       mascot(`${d.name} asked something. Thinking…`);
-      perfSidebar.onGenStart({ model: d.model || (MODELS[ai.model]?.label?.split("·")[0]?.trim() || ai.model) });
+      perfSidebar?.onGenStart?.({ model: d.model || (MODELS[ai.model]?.label?.split("·")[0]?.trim() || ai.model) });
       break;
     case "ai-token":
       ai.remoteReply = (ai.remoteReply || "") + d.text;
       chatBotUpdate(ai.remoteReply);
-      perfSidebar.onToken(d.text);
+      perfSidebar?.onToken?.(d.text);
       break;
     case "ai-gendone":
       chatBotEnd(d.hidden ? "answer hidden by the host" : (ai.remoteReply || ""), d.stats, d.capped);
       setSendButtonState("send");
       mascot(d.capped ? "Reached context limit. Ask to continue or start fresh." : "Your turn. Ask anything.");
-      perfSidebar.onGenDone({ stats: d.stats });
+      perfSidebar?.onGenDone?.({ stats: d.stats });
       break;
     case "ai-ready-all":
       if (ai.readyRetryTimer) { clearInterval(ai.readyRetryTimer); ai.readyRetryTimer = null; }

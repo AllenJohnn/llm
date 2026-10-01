@@ -37,5 +37,9 @@
   "devDependencies": {
     "peer": "^1.0.2",
     "playwright": "1.49.1"
+  },
+  "dependencies": {
+    "jsdom": "^29.1.1",
+    "puppeteer": "^25.12.0"
   }
 }

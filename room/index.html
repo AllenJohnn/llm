@@ -720,7 +720,7 @@ window.sliceStart = function(create) {
   }
   .fallback-mode-btn.active svg { stroke: #db2777; color: #db2777; }
 
-  .sidebar-fallback-card { display: none !important;
+  .sidebar-fallback-card { display: flex;
     display: flex; flex-direction: column; gap: 5px;
     background: color-mix(in srgb, var(--panel-2) 80%, transparent);
     border: 1px solid var(--border); border-radius: 10px;
@@ -962,7 +962,7 @@ window.sliceStart = function(create) {
             <span class="sfc-toggle-thumb"></span>
           </button>
         </div>
-        <div class="sfc-desc" id="sfc-desc">Disabled · uses downloaded models</div>
+        <div class="sfc-desc" id="sfc-desc">● <b>Distributed Local</b><br><span style="opacity:0.8;font-size:9.5px">WebGPU + peer inference</span></div>
       </div>
       <div id="ai-need">
         <div id="need-bar"><div id="need-fill"></div></div>

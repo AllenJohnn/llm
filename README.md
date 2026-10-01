@@ -141,3 +141,45 @@ Model weights and the GGUF format come from the [Qwen](https://huggingface.co/Qw
 ## License
 
 [MIT](LICENSE).
+
+## Dashboard & Telemetry
+The new modern UI includes a comprehensive dashboard for tracking distributed inference:
+- **Playground**: Real-time interaction with the cluster (fast/deep think modes).
+- **Network Topology**: Visual representation of the cluster, showing coordinator and peers.
+- **Telemetry**: Live metrics on throughput (tok/s), Time to First Token (TTFT), active peers, and generation latency.
+- **Dynamic Workload Distribution**: Devices automatically join the mesh and compute their designated layers, scaling throughput.
+
+## Groq Fallback Mode
+When local WebGPU inference is not feasible, use the **Groq Fallback Mode**:
+- Zero gigabytes download.
+- Instant model loading via Groq API.
+- Preserves local model identity (Qwen 3.8 27B) seamlessly to maintain application UX.
+- Toggle it inside the Settings tab.
+
+## Dashboard & Telemetry
+The new modern UI includes a comprehensive dashboard for tracking distributed inference:
+- **Playground**: Real-time interaction with the cluster.
+- **Network Topology**: Visual representation of the cluster.
+- **Telemetry**: Live metrics on throughput (tok/s), Time to First Token (TTFT), active peers, and latency.
+- **Dynamic Workload Distribution**: Devices automatically join the mesh and compute their designated layers.
+
+## Groq Fallback Mode
+When local WebGPU inference is not feasible, use the **Groq Fallback Mode**:
+- Zero gigabytes download.
+- Instant model loading via Groq API.
+- Preserves local model identity (Qwen 3.8 27B) seamlessly to maintain application UX.
+- Toggle it inside the Settings tab.
+
+## Dashboard & Telemetry
+The new modern UI includes a comprehensive dashboard for tracking distributed inference:
+- **Playground**: Real-time interaction with the cluster.
+- **Network Topology**: Visual representation of the cluster.
+- **Telemetry**: Live metrics on throughput (tok/s), Time to First Token (TTFT), active peers, and latency.
+- **Dynamic Workload Distribution**: Devices automatically join the mesh and compute their designated layers.
+
+## Groq Fallback Mode
+When local WebGPU inference is not feasible, use the **Groq Fallback Mode**:
+- Zero gigabytes download.
+- Instant model loading via Groq API.
+- Preserves local model identity seamlessly to maintain application UX.
+- Toggle it inside the Settings tab.

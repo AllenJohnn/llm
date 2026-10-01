@@ -67,13 +67,7 @@ export class PerfSidebar {
 
     // Scalability benchmark curve (Nodes vs Throughput Multiplier / Speed)
     // Strictly in increasing order to demonstrate multi-system efficiency
-    this.scalingFactors = [
-      { nodes: 1, label: "1 Node", mult: 1.0, efficiency: "100%", desc: "Solo baseline" },
-      { nodes: 2, label: "2 Nodes", mult: 1.85, efficiency: "92.5%", desc: "Split pipeline (+85%)" },
-      { nodes: 3, label: "3 Nodes", mult: 2.65, efficiency: "88.3%", desc: "Trio cluster (+165%)" },
-      { nodes: 4, label: "4 Nodes", mult: 3.40, efficiency: "85.0%", desc: "Quad mesh (+240%)" },
-      { nodes: 5, label: "5+ Nodes", mult: 4.15, efficiency: "83.0%", desc: "Cluster (+315%)" },
-    ];
+    this.observedScaling = new Map(); // clusterSize -> peakTps
   }
 
   init() {
@@ -1128,63 +1122,60 @@ export class PerfSidebar {
       });
     }
 
-    const data = this.scalingFactors;
-    const labels = data.map(d => d.label);
-    const mults = data.map(d => d.mult);
     
-    const bgColors = data.map(d => {
-      const isActive = (d.nodes === this.clusterSize) || (d.nodes === 5 && this.clusterSize >= 5);
-      return isActive ? 'rgba(43, 78, 255, 0.6)' : 'rgba(139, 135, 122, 0.2)';
-    });
+      const labels = ["1 device", "2 devices", "3 devices", "4 devices", "5+ devices"];
+      const speeds = [1, 2, 3, 4, 5].map(n => this.observedScaling.get(n) || 0);
 
-    const borderColors = data.map(d => {
-      const isActive = (d.nodes === this.clusterSize) || (d.nodes === 5 && this.clusterSize >= 5);
-      return isActive ? '#2b4eff' : 'transparent';
-    });
+      const bgColors = [1, 2, 3, 4, 5].map(n => {
+        const isActive = (n === this.clusterSize) || (n === 5 && this.clusterSize >= 5);
+        return isActive ? 'rgba(43, 78, 255, 0.6)' : 'rgba(139, 135, 122, 0.2)';
+      });
 
-    this.scalingChartInstance.data.labels = labels;
-    this.scalingChartInstance.data.datasets = [
-      {
-        type: 'line',
-        label: 'Trend',
-        data: mults,
-        borderColor: 'rgba(43, 78, 255, 0.7)',
-        borderDash: [3, 3],
-        borderWidth: 2,
-        tension: 0.4,
-        fill: false,
-        pointRadius: 0
-      },
-      {
-        type: 'bar',
-        label: 'Multiplier',
-        data: mults,
-        backgroundColor: bgColors,
-        borderColor: borderColors,
-        borderWidth: 1.5,
-        borderRadius: 4
+      const borderColors = [1, 2, 3, 4, 5].map(n => {
+        const isActive = (n === this.clusterSize) || (n === 5 && this.clusterSize >= 5);
+        return isActive ? '#2b4eff' : 'transparent';
+      });
+
+      if (this.scalingChartInstance && this.scalingChartInstance.data) {
+        this.scalingChartInstance.data.labels = labels;
+        this.scalingChartInstance.data.datasets = [
+          {
+            type: 'bar',
+            label: 'Peak Speed (tok/s)',
+            data: speeds,
+            backgroundColor: bgColors,
+            borderColor: borderColors,
+            borderWidth: 1.5,
+            borderRadius: 4
+          }
+        ];
+        try { this.scalingChartInstance.update(); } catch (e) { console.warn("Chart update failed", e); }
       }
-    ];
-    this.scalingChartInstance.update();
-    this.updateScalingLegend();
+      this.updateScalingLegend();
+
   }
 updateScalingLegend() {
     if (typeof document === "undefined") return;
     const legend = document.getElementById("perf-scaling-legend");
     if (!legend) return;
 
-    legend.innerHTML = this.scalingFactors.map(item => {
-      const isActive = (item.nodes === this.clusterSize) || (item.nodes === 5 && this.clusterSize >= 5);
+    
+    legend.innerHTML = [1, 2, 3, 4, 5].map(n => {
+      const isActive = (n === this.clusterSize) || (n === 5 && this.clusterSize >= 5);
+      const label = n === 5 ? "5+ devices" : n + " device" + (n > 1 ? "s" : "");
+      const speed = this.observedScaling.get(n);
+      const speedText = speed ? speed.toFixed(1) + " tok/s" : "— waiting for benchmark";
       return `
         <div class="perf-scaling-row ${isActive ? 'active' : ''}">
           <span class="scaling-node-label">
-            ${item.label}
+            ${label}
             ${isActive ? '<span class="scaling-active-tag">CURRENT</span>' : ''}
           </span>
-          <span class="scaling-node-mult">${item.mult.toFixed(2)}x · ${item.desc}</span>
+          <span class="scaling-node-mult">${speedText}</span>
         </div>
       `;
     }).join("");
+
   }
 }
 
