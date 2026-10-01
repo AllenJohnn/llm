@@ -694,7 +694,7 @@ window.sliceStart = function(create) {
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
   }
   .think-mode-btn.active svg { color: var(--accent); }
-  .fallback-mode-btn { display: none !important;
+  .fallback-mode-btn {
     border: 1px solid var(--border); background: var(--panel-2); padding: 3px 9px; border-radius: 8px;
     font-family: var(--mono); font-size: 10.5px; color: var(--muted);
     display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
@@ -707,7 +707,7 @@ window.sliceStart = function(create) {
   }
   .fallback-mode-btn.active svg { stroke: #db2777; color: #db2777; }
 
-  .sidebar-fallback-card { display: none !important;
+  .sidebar-fallback-card {
     display: flex; flex-direction: column; gap: 5px;
     background: color-mix(in srgb, var(--panel-2) 80%, transparent);
     border: 1px solid var(--border); border-radius: 10px;

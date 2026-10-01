@@ -1868,6 +1868,15 @@ function sendChat(msg, askerId) {
   if (msg.t !== "ai-token") for (const id of hidden) sendTo(id, { t: msg.t, name: msg.name, stats: msg.stats, capped: msg.capped, hidden: true });
 }
 async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
+  const currentModelKey = $("ai-model")?.value || "qwen3.8-27b";
+  if (!isGroqMode && ai.GModel && ai.GModel !== currentModelKey && ai.role === "host") {
+    console.log("Model changed mid-conversation. Reloading...", currentModelKey);
+    await aiStart(currentModelKey);
+    if (!ai.engine || ai.busy) {
+      console.log("Waiting for cluster to finish loading...");
+      return;
+    }
+  }
   const text = (textArg ?? $("ai-prompt").value).trim();
   const asker = who || myName;
   if (!text || ai.busy === "gen") return;
