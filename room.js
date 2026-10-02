@@ -389,6 +389,8 @@ function updateCluster() {
     `${all.length} device${all.length > 1 ? "s" : ""} · ${gpus} WebGPU · ${pledged.toFixed(1)} GB pledged`;
   updateTopbarPeers();
 
+  let hostDevId = ai?.role === "host" ? "self" : (ai?.hostId || null);
+
   const devices = [
     {
       id: "self",
@@ -397,7 +399,8 @@ function updateCluster() {
       meta: myMeta || {},
       rtt: null,
       bw: null,
-      layers: ai?.layersByName ? ai.layersByName[myName] : null
+      layers: ai?.layersByName ? ai.layersByName[myName] : null,
+      workerRole: (ai?.layersByName && ai.layersByName[myName]) ? (hostDevId === "self" ? "Host" : "Worker") : "Idle"
     },
     ...[...members.entries()].map(([id, m]) => {
       const c = conns.get(id);
@@ -409,7 +412,8 @@ function updateCluster() {
         meta: m.meta || c?.meta || {},
         rtt: c?.rtt ?? null,
         bw: c?.bw ?? null,
-        layers: ai?.layersByName ? ai.layersByName[name] : null
+        layers: ai?.layersByName ? ai.layersByName[name] : null,
+        workerRole: (ai?.layersByName && ai.layersByName[name]) ? (hostDevId === id ? "Host" : "Worker") : "Idle"
       };
     })
   ];

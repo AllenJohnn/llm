@@ -92,6 +92,7 @@ export class PerfSidebar {
         ...nd,
         tps: old.tps || 0,
         tokens: old.tokens || 0,
+        workerRole: nd.workerRole || old.workerRole || "Idle",
         visible: old.visible !== undefined ? old.visible : true,
         streamPoints: old.streamPoints || [],
         color: DEVICE_COLORS[idx % DEVICE_COLORS.length]
@@ -755,7 +756,7 @@ export class PerfSidebar {
         <!-- Grid Devices Processing Breakdown -->
         <div class="perf-devices-breakdown-wrap" id="perf-devices-breakdown-wrap">
           <div class="perf-sec-label" style="margin-top: 4px;">
-            <span>GRID TOKENS PROCESSED</span>
+            <span>GRID PARTICIPATION</span>
             <span class="perf-badge-pill" id="perf-grid-share-badge">1 NODE</span>
           </div>
           <div id="perf-devices-list" style="display:flex; flex-direction:column; gap:6px;"></div>
@@ -898,6 +899,19 @@ export class PerfSidebar {
   updateDeviceListUI() {
     if (typeof document === "undefined") return;
 
+    // 0. Update Hero Sub and Grid Badge
+    const activeNodes = this.devices.filter(d => d.workerRole && d.workerRole !== "Idle").length;
+    const isDistributed = activeNodes > 1;
+    const heroSubEl = document.getElementById("perf-hero-sub");
+    if (heroSubEl) {
+      heroSubEl.textContent = isDistributed ? "Distributed Execution" : "Solo Device Execution";
+    }
+    const gridShareBadgeEl = document.getElementById("perf-grid-share-badge");
+    if (gridShareBadgeEl) {
+      const displayCount = activeNodes > 0 ? activeNodes : this.devices.length;
+      gridShareBadgeEl.textContent = displayCount === 1 ? "1 NODE" : `${displayCount} NODES`;
+    }
+
     // 1. Legend Chips above Canvas
     const legendEl = document.getElementById("perf-device-legend");
     if (legendEl) {
@@ -954,17 +968,21 @@ export class PerfSidebar {
         const gpuMeta = d.meta?.gpu || (d.meta?.webgpu ? "WebGPU" : "Mesh Node");
         const latMeta = d.rtt !== null ? `RTT: ${d.rtt}ms` : "Local Host";
 
+        const workerText = d.workerRole === "Worker" ? "Distributed Worker" : (d.workerRole === "Host" ? "Host" : (d.stage || "Idle"));
         return `
           <div class="perf-dev-card ${this.isStreaming ? 'streaming' : ''}" id="dev-card-${escapeHtml(d.id)}">
             <div class="perf-dev-top">
               <div class="perf-dev-title-wrap">
                 <span class="perf-dev-dot" style="background:${d.color};"></span>
                 <span class="perf-dev-name" title="${escapeHtml(d.name)}">${escapeHtml(d.name)}</span>
-                <span class="perf-dev-stage-badge">${escapeHtml(d.stage)}</span>
+                <span class="perf-dev-stage-badge">${escapeHtml(workerText)}</span>
               </div>
               <div class="perf-dev-rates">
-                <span class="perf-dev-tps" id="dev-tps-${escapeHtml(d.id)}">${d.tps.toFixed(1)} tok/s</span>
-                <span class="perf-dev-toks" id="dev-toks-${escapeHtml(d.id)}">${d.tokens} tok</span>
+                ${d.workerRole === "Worker"
+                  ? `<span class="perf-dev-toks" id="dev-role-${escapeHtml(d.id)}">${escapeHtml(d.layers)}</span>`
+                  : `<span class="perf-dev-tps" id="dev-tps-${escapeHtml(d.id)}">${d.tps.toFixed(1)} tok/s</span>
+                     <span class="perf-dev-toks" id="dev-toks-${escapeHtml(d.id)}">${d.tokens} tok</span>`
+                }
               </div>
             </div>
             <div class="perf-dev-meter-track">
@@ -1278,12 +1296,12 @@ updateScalingLegend() {
       
       this.streamPoints.push({ t: elapsedSec, tps: instantTps, total: this.tokenCount });
       
-      const selfDev = this.devices.find(d => d.id === 'self');
-      if (selfDev) {
-        selfDev.tps = instantTps;
-        selfDev.tokens = this.tokenCount;
-        if (!selfDev.streamPoints) selfDev.streamPoints = [];
-        selfDev.streamPoints.push({ t: elapsedSec, tps: instantTps, total: this.tokenCount });
+      const targetDev = this.devices.find(d => d.workerRole === 'Host') || this.devices.find(d => d.id === 'self');
+      if (targetDev) {
+        targetDev.tps = instantTps;
+        targetDev.tokens = this.tokenCount;
+        if (!targetDev.streamPoints) targetDev.streamPoints = [];
+        targetDev.streamPoints.push({ t: elapsedSec, tps: instantTps, total: this.tokenCount });
       }
       
       if (typeof document !== 'undefined') {
@@ -1355,3 +1373,6 @@ function escapeHtml(str) {
 
 // Global instance export
 export const perfSidebar = new PerfSidebar();
+
+
+
