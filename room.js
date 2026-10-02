@@ -1674,6 +1674,9 @@ async function aiStart(modelArg) {
   $("ai-start").disabled = true;
   $("ai-model").disabled = true;
   ai.readyPeers = new Set();
+  if (ai.model !== modelKey || ai.GModel !== modelKey) {
+    ai.cfg = null; ai.G = null; ai.GModel = null; ai.tok = null; ai.lastHidden = null;
+  }
   try {
     ai.role = "host";
     ai.model = modelKey;
@@ -1815,6 +1818,8 @@ function aiMaybeReady() {
   $("ai-prompt").focus();
   broadcastAll({ t: "ai-ready-all" });
   mascot("Cluster online! Ask anything. Everyone in the room can.");
+  if ($("ai-model")) $("ai-model").disabled = false;
+  ai.busy = false;
 }
 
 // run one token through the whole pipeline, returns logits
@@ -1892,6 +1897,7 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
     $("ai-prompt").value = "";
     $("ai-prompt").style.height = "auto";
     setSendButtonState("stop");
+    if ($("ai-model")) $("ai-model").disabled = true;
 
     if (!continuation.isContinuation) {
       chatUser(asker, text);
@@ -1990,6 +1996,8 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
       setSendButtonState("send");
       if (autoContinuation) {
         aiGenerate(autoContinuation.prompt, asker, askerId, { ...autoContinuation, isContinuation: true });
+      } else {
+        if ($("ai-model")) $("ai-model").disabled = false;
       }
     }
     return;
@@ -2011,6 +2019,7 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
   $("ai-prompt").value = "";
   $("ai-prompt").style.height = "auto";
   setSendButtonState("stop");
+  if ($("ai-model")) $("ai-model").disabled = true;
   const V = ai.tok.vocab;
   const isPhi = MODELS[ai.model]?.arch === "phi3";
   const imStart = V[isPhi ? "<|user|>" : "<|im_start|>"], imEnd = V[isPhi ? "<|end|>" : "<|im_end|>"], eot = V["<|endoftext|>"];
@@ -2260,6 +2269,8 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
     setSendButtonState("send");
     if (autoContinuation) {
       aiGenerate(autoContinuation.prompt, asker, askerId, { ...autoContinuation, isContinuation: true });
+    } else {
+      if ($("ai-model")) $("ai-model").disabled = false;
     }
   }
 }
@@ -2540,6 +2551,8 @@ async function aiOnData(from, d) {
         aiStatus(`cluster online · serving ${formatLayerRange(ai.range, ai.role === "host")}`);
         mascot("Cluster online! Type a question, the whole room answers.");
       }
+      if ($("ai-model")) $("ai-model").disabled = false;
+      ai.busy = false;
       break;
     case "ai-ask":
       if (ai.role !== "host" && !isHost) break;
