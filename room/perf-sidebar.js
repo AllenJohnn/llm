@@ -1349,10 +1349,16 @@ updateScalingLegend() {
       if (typeof document !== 'undefined') {
         const sessTokensEl = document.getElementById('perf-sess-tokens');
         if (sessTokensEl) sessTokensEl.innerText = this.sessionTokens.toLocaleString() + ' tok';
-        const sessAvgEl = document.getElementById('perf-sess-avg');
+        const sessAvgEl = document.getElementById('perf-sess-avg-tps');
         if (sessAvgEl && this.totalGenerationTime > 0) {
           const avg = this.sessionTokens / this.totalGenerationTime;
           sessAvgEl.innerText = avg.toFixed(1) + ' tok/s';
+        }
+        const sessDevicesEl = document.getElementById('perf-sess-devices');
+        if (sessDevicesEl) {
+          const activeNodes = this.devices.filter(d => d.workerRole && d.workerRole !== "Idle").length;
+          const displayCount = activeNodes > 0 ? activeNodes : this.devices.length;
+          sessDevicesEl.innerText = displayCount === 1 ? '1 Device' : `${displayCount} Devices`;
         }
       }
       this.renderLiveChart();

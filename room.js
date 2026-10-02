@@ -493,7 +493,7 @@ function wire(conn, name, meta, initiator = false) {
     const e = conns.get(conn.peer);
     conns.delete(conn.peer);
     if (ai.chain) {
-      ai.chain = ai.chain.filter((id) => id !== conn.peer);
+      // Do NOT filter ai.chain. It represents the required topology.
       ai.readyPeers.delete(conn.peer);
       if (ai.waiters && ai.waiters.size > 0) {
         for (const [key, waiter] of ai.waiters) {
@@ -503,16 +503,20 @@ function wire(conn, name, meta, initiator = false) {
         }
       }
       if (isHost && ai.role === "host" && ai.engine) {
+        const trueSolo = ai.range && ai.range[0] === 0 && ai.range[1] >= (ai.cfg?.num_hidden_layers || 999);
+        if (!trueSolo && ai.chain.includes(conn.peer)) {
+          ai.clusterDegraded = true;
+          ai.abortGen = true;
+          aiStatus(`Cluster degraded \u2014 worker ${e?.name || conn.peer} disconnected. Reload model to recover.`);
+          log("swarm", `Cluster degraded \u2014 missing required worker ${e?.name || conn.peer}`);
+        }
         aiMaybeReady();
       }
     }
-    if (isHost) {   // on the host a closed link means the device left; workers wait for the roster
+    if (isHost) {
       dropCard(conn.peer); members.delete(conn.peer); roster.delete(conn.peer); broadcastRoster();
       log("swarm", `${e?.name || conn.peer} left`);
-      if (ai.chain && ai.chain.length === 0 && ai.engine) {
-        aiStatus("peer left — running in solo mode");
-      }
-    } else if (conn.peer === ai.hostId || entry.name === "host") log("swarm", "lost the link to the host");
+    } else if (conn.peer === ai.hostId || (e && e.name === "host")) log("swarm", "lost the link to the host");
     updateCluster();
   });
   conn.on("error", () => {});
@@ -1796,30 +1800,39 @@ function aiRejoin(newId, name) {
 }
 function aiMaybeReady() {
   if (ai.role !== "host" || !ai.engine) return;
-  ai.chain = (ai.chain || []).filter((id) => conns.has(id) && conns.get(id)?.conn?.open !== false);
+  
+  // Do NOT filter ai.chain.
   if (ai.deferred?.length && ai.readyPeers.size >= ai.chain.length - ai.deferred.length) {
     // host and the big devices are done: now the small ones fetch their few layers
     const d = ai.deferred; ai.deferred = [];
-    aiStatus(`big devices ready — loading ${d.length} small device(s) now…`);
+    aiStatus(`big devices ready \u2014 loading ${d.length} small device(s) now\u2026`);
     for (const { id, msg } of d) sendTo(id, msg);
     return;
   }
-  const allReady = ai.chain.every((id) => ai.readyPeers.has(id));
+  
+  // A device is ready if it has sent ai-ready AND it is currently connected.
+  const allReady = ai.chain.every((id) => ai.readyPeers.has(id) && conns.has(id) && conns.get(id)?.conn?.open !== false);
   if (!allReady) {
     loadCardRender();
     return;
   }
+  
+  // If we recover all required workers, clear the degraded flag
+  ai.clusterDegraded = false;
+  
   const n = ai.chain.length + 1;
-  aiStatus(`cluster online — ${n} device${n > 1 ? "s" : ""}, ${ai.cfg?.num_hidden_layers || ""} layers split ${n} ways`);
+  aiStatus(`cluster online \u2014 ${n} device${n > 1 ? "s" : ""}, ${ai.cfg?.num_hidden_layers || ""} layers split ${n} ways`);
   clearInterval(ai.progTimer);
   aiLoading(false);
-  $("load-card").classList.remove("on");
-  $("ai-panel").classList.remove("loading");
-  $("ai-panel").classList.add("online");
-  $("ai-row").style.display = "flex";
+  if ($("load-card")) $("load-card").classList.remove("on");
+  if ($("ai-panel")) {
+    $("ai-panel").classList.remove("loading");
+    $("ai-panel").classList.add("online");
+  }
+  if ($("ai-row")) $("ai-row").style.display = "flex";
   renderWelcomePrompts();
-  $("ai-empty").style.display = "";
-  $("ai-prompt").focus();
+  if ($("ai-empty")) $("ai-empty").style.display = "";
+  if ($("ai-prompt")) $("ai-prompt").focus();
   broadcastAll({ t: "ai-ready-all" });
   mascot("Cluster online! Ask anything. Everyone in the room can.");
   if ($("ai-model")) $("ai-model").disabled = false;
@@ -1828,8 +1841,13 @@ function aiMaybeReady() {
 
 // run one token through the whole pipeline, returns logits
 async function aiPipeToken(id, needLogits = true) {
+  if (ai.clusterDegraded) throw new Error("Cluster degraded \u2014 required worker disconnected");
   const pos = ai.pos;
-  if (!ai.chain.length && !needLogits) {
+  
+  // A true solo model has no chain AND owns all layers.
+  const trueSolo = !ai.chain.length && ai.range && ai.range[0] === 0 && ai.range[1] >= (ai.cfg?.num_hidden_layers || 999);
+  
+  if (trueSolo && !needLogits) {
     // solo prefill: layers only, no head, no readback; sync every 8 tokens
     ai.engine.pos = pos;
     await ai.engine.prefillToken(id);
@@ -1837,9 +1855,11 @@ async function aiPipeToken(id, needLogits = true) {
     ai.pos++;
     return null;
   }
+  console.log(`[Diagnostic] Host starting embedRun for pos ${pos}`);
   let h = await ai.engine.embedRun(id, pos);
-  if (badF32(h)) throw new Error(`NaN after HOST layers (pos ${pos}) — host GPU kernel issue`);
-  if (ai.chain.length) {
+  console.log(`[Diagnostic] Host completed embedRun for pos ${pos}`);
+  if (badF32(h)) throw new Error(`NaN after HOST layers (pos ${pos}) \u2014 host GPU kernel issue`);
+  if (!trueSolo && ai.chain.length) {
     const targetPeer = ai.chain[0];
     const timeoutMs = pos === 0 ? 90000 : 60000;
     const returned = new Promise((res, rej) => {
@@ -1851,17 +1871,22 @@ async function aiPipeToken(id, needLogits = true) {
         }
       }, timeoutMs);
     });
+    console.log(`[Diagnostic] Host sending ai-hidden to peer for pos ${pos}`);
     const sent = sendHidden(targetPeer, { t: "ai-hidden", pos, ...packWire(h) });
     if (!sent) {
       ai.waiters.delete(pos);
       throw new Error(`Failed to transmit activations to peer ${conns.get(targetPeer)?.name || targetPeer}`);
     }
+    console.log(`[Diagnostic] Host awaiting returned hidden for pos ${pos}...`);
     h = await returned;
+    console.log(`[Diagnostic] Host received returned hidden for pos ${pos}!`);
     if (badF32(h)) throw new Error(`NaN in hidden returned by peers (pos ${pos}) — check peer status lines`);
     ai.lastHidden = h;
   } // solo mode: engine holds every layer, embedRun already produced the final hidden
   if (!needLogits) { ai.pos++; return null; }   // prefill: skip the head entirely
+  console.log(`[Diagnostic] Host computing headFromHidden...`);
   const logits = await ai.engine.headFromHidden(h);
+  console.log(`[Diagnostic] Host completed headFromHidden!`);
   if (badF32(logits)) throw new Error(`NaN in logits (pos ${ai.pos}) — head/lm_head kernel issue on host`);
   ai.pos++;
   return logits;
@@ -2026,10 +2051,31 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
   if ($("ai-model")) $("ai-model").disabled = true;
   const V = ai.tok.vocab;
   const isPhi = MODELS[ai.model]?.arch === "phi3";
-  const imStart = V[isPhi ? "<|user|>" : "<|im_start|>"], imEnd = V[isPhi ? "<|end|>" : "<|im_end|>"], eot = V["<|endoftext|>"];
-  const ids = isPhi
-    ? [imStart, ...ai.tok.encode("\n" + text), imEnd, ...ai.tok.encode("\n"), V["<|assistant|>"], ...ai.tok.encode("\n")]
-    : [imStart, ...ai.tok.encode("system\nYou are a helpful assistant."), imEnd, ...ai.tok.encode("\n"), imStart, ...ai.tok.encode("user\n" + text), imEnd, ...ai.tok.encode("\n"), imStart, ...ai.tok.encode("assistant\n")];
+  const isDeepSeek = ai.model && ai.model.includes("deepseek");
+  let imStart, imEnd, eot, ids;
+
+  if (isDeepSeek) {
+    const bos = ai.cfg?.bos_token_id !== undefined ? ai.cfg.bos_token_id : (V["<｜begin of sentence｜>"] ?? V["<｜begin\u2581of\u2581sentence｜>"] ?? V["<|begin of sentence|>"] ?? 151646);
+    const eos = ai.cfg?.eos_token_id !== undefined ? ai.cfg.eos_token_id : (V["<｜end of sentence｜>"] ?? V["<｜end\u2581of\u2581sentence｜>"] ?? V["<|end of sentence|>"] ?? 151643);
+    const user = V["<｜User｜>"] ?? V["<|User|>"] ?? 151644;
+    const asst = V["<｜Assistant｜>"] ?? V["<|Assistant|>"] ?? 151645;
+    
+    imStart = bos;
+    imEnd = eos;
+    eot = V["<|endoftext|>"];
+
+    ids = [];
+    if (bos !== undefined) ids.push(bos);
+    if (user !== undefined) ids.push(user);
+    ids.push(...ai.tok.encode(text));
+    if (asst !== undefined) ids.push(asst);
+  } else if (isPhi) {
+    imStart = V["<|user|>"]; imEnd = V["<|end|>"]; eot = V["<|endoftext|>"];
+    ids = [imStart, ...ai.tok.encode("\n" + text), imEnd, ...ai.tok.encode("\n"), V["<|assistant|>"], ...ai.tok.encode("\n")];
+  } else {
+    imStart = V["<|im_start|>"]; imEnd = V["<|im_end|>"]; eot = V["<|endoftext|>"];
+    ids = [imStart, ...ai.tok.encode("system\nYou are a helpful assistant."), imEnd, ...ai.tok.encode("\n"), imStart, ...ai.tok.encode("user\n" + text), imEnd, ...ai.tok.encode("\n"), imStart, ...ai.tok.encode("assistant\n")];
+  }
   // Fast Mode (default): pre-close the think block so Qwen3 skips the 100+ token monologue and generates the answer immediately!
   const isThinkingModel = MODELS[ai.model]?.thinking || (ai.model && ai.model.includes("qwen3"));
   const wantThinking = ai.thinkingMode === "deep";
@@ -2067,16 +2113,19 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
     let capped = false;   // set when generation stops because the context filled up
     let logits = null;
     const tPre = performance.now();
-    // Ensure ai.chain only contains live open connections
-    ai.chain = (ai.chain || []).filter((id) => conns.has(id) && conns.get(id)?.conn?.open !== false);
+    
+    if (ai.clusterDegraded) throw new Error("Cluster degraded \u2014 required worker disconnected. Please reload the model.");
 
-    if (!ai.chain.length && ai.engine.prefillTokens && ids.length > 1) {
+    // A true solo model has no chain AND owns all layers.
+    const trueSolo = !ai.chain.length && ai.range && ai.range[0] === 0 && ai.range[1] >= (ai.cfg?.num_hidden_layers || 999);
+
+    if (trueSolo && ai.engine.prefillTokens && ids.length > 1) {
       // solo: batched prefill, 4 prompt tokens per GPU pass
       ai.engine.pos = ai.pos;
       await ai.engine.prefillTokens(ids.slice(0, -1));
       ai.pos = ai.engine.pos;
       logits = await aiPipeToken(ids[ids.length - 1]);
-    } else if (ai.chain.length && ai.engine.embedRunBatch && ai.engine.mtp && ids.length > 5) {
+    } else if (!trueSolo && ai.chain.length && ai.engine.embedRunBatch && ai.engine.mtp && ids.length > 5) {
       // split: speculative/MTP model with tested batched prefill (Qwen 3.8 27B)
       let i = 0;
       const hdim = ai.engine.dims.dim;
@@ -2090,8 +2139,11 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
           const NCW = W;
           const basePos = ai.pos;
           const hb = new Float32Array(nChunks * NCW * hdim);
-          for (let c = 0; c < nChunks; c++)
+          for (let c = 0; c < nChunks; c++) {
+            console.log(`[Diagnostic] Host batch prefill chunk ${c+1}/${nChunks} start`);
             hb.set(await ai.engine.embedRunBatch(ids.slice(i + c * NCW, i + (c + 1) * NCW), basePos + c * NCW), c * NCW * hdim);
+            console.log(`[Diagnostic] Host batch prefill chunk ${c+1}/${nChunks} done`);
+          }
           if (badF32(hb)) throw new Error(`NaN in batched prefill (pos ${basePos})`);
           if (ai.chain.length) {
             const returned = new Promise((res, rej) => {
@@ -2103,8 +2155,11 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
                 }
               }, 15000);
             });
+            console.log(`[Diagnostic] Host sending ai-hidden-b to peer...`);
             sendHidden(ai.chain[0], { t: "ai-hidden-b", basePos, n: nChunks * NCW, ...packWire(hb) });
+            console.log(`[Diagnostic] Host awaiting returned batch from peer...`);
             await returned;
+            console.log(`[Diagnostic] Host received returned batch from peer!`);
           }
           ai.pos = basePos + nChunks * NCW;
           i += nChunks * NCW;
@@ -2510,6 +2565,10 @@ async function aiOnData(from, d) {
     case "ai-abort":
       if (isHost && ai.busy === "gen") {
         ai.abortGen = true;
+        if (ai.waiters) {
+          for (const [k, w] of ai.waiters) w.reject(new Error("Generation stopped by user"));
+          ai.waiters.clear();
+        }
       }
       break;
     case "ai-genstart":

@@ -25,7 +25,11 @@ export function makeTokenizer(tj) {
     for (const id of ids) {
       const tok = idToTok[id];
       if (tok === undefined) continue;
-      for (const ch of tok) { const b = charToByte[ch]; if (b !== undefined) bytes.push(b); }
+      for (const ch of tok) { 
+        const b = charToByte[ch]; 
+        if (b !== undefined) bytes.push(b); 
+        else bytes.push(...enc.encode(ch));
+      }
     }
     return new Uint8Array(bytes);
   };
