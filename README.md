@@ -149,12 +149,8 @@ The new modern UI includes a comprehensive dashboard for tracking distributed in
 - **Telemetry**: Live metrics on throughput (tok/s), Time to First Token (TTFT), active peers, and generation latency.
 - **Dynamic Workload Distribution**: Devices automatically join the mesh and compute their designated layers, scaling throughput.
 
-## Groq Fallback Mode
-When local WebGPU inference is not feasible, use the **Groq Fallback Mode**:
-- Zero gigabytes download.
-- Instant model loading via Groq API.
-- Preserves local model identity (Qwen 3.8 27B) seamlessly to maintain application UX.
-- Toggle it inside the Settings tab.
+## Groq Cloud Mode
+Groq Cloud mode is enabled by default and can be switched off in the room. It sends prompts and conversation history to Groq, uses the Groq model shown in the room, and downloads no model weights. The local model picker acts as a mapping to a Groq-hosted model in this mode; it does not run the selected local weights. Turn Groq Cloud off to run local WebGPU inference.
 
 ## Dashboard & Telemetry
 The new modern UI includes a comprehensive dashboard for tracking distributed inference:
@@ -163,12 +159,8 @@ The new modern UI includes a comprehensive dashboard for tracking distributed in
 - **Telemetry**: Live metrics on throughput (tok/s), Time to First Token (TTFT), active peers, and latency.
 - **Dynamic Workload Distribution**: Devices automatically join the mesh and compute their designated layers.
 
-## Groq Fallback Mode
-When local WebGPU inference is not feasible, use the **Groq Fallback Mode**:
-- Zero gigabytes download.
-- Instant model loading via Groq API.
-- Preserves local model identity (Qwen 3.8 27B) seamlessly to maintain application UX.
-- Toggle it inside the Settings tab.
+## Groq Cloud Mode
+Groq Cloud mode sends prompts and conversation history to Groq, uses the Groq model shown in the room, and downloads no model weights. Turn it off to run local WebGPU inference.
 
 ## Dashboard & Telemetry
 The new modern UI includes a comprehensive dashboard for tracking distributed inference:
@@ -177,9 +169,5 @@ The new modern UI includes a comprehensive dashboard for tracking distributed in
 - **Telemetry**: Live metrics on throughput (tok/s), Time to First Token (TTFT), active peers, and latency.
 - **Dynamic Workload Distribution**: Devices automatically join the mesh and compute their designated layers.
 
-## Groq Fallback Mode
-When local WebGPU inference is not feasible, use the **Groq Fallback Mode**:
-- Zero gigabytes download.
-- Instant model loading via Groq API.
-- Preserves local model identity seamlessly to maintain application UX.
-- Toggle it inside the Settings tab.
+## Groq Cloud Mode
+Groq Cloud mode sends prompts and conversation history to Groq, uses the Groq model shown in the room, and downloads no model weights. Turn it off to run local WebGPU inference.

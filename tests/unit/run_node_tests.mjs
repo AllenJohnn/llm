@@ -400,8 +400,8 @@ await test("engine: cfgFromGGUF extracts complete architecture config from GGUF 
 import { runContextTests } from "./context_overflow_test.js";
 await runContextTests(test);
 
-// Fallback Mode & Groq Qwen 27B tests
-import { GROQ_QWEN_27B_MODEL, parseGroqSSEChunk, completeGroqChat } from "../../room/groq.js";
+// Groq Cloud mode and hosted-model tests
+import { GROQ_DEFAULT_MODEL, parseGroqSSEChunk, completeGroqChat } from "../../room/groq.js";
 
 await test("fallbackmode: variable is defined and can be toggled", () => {
   var fallbackmode = false;
@@ -419,9 +419,8 @@ await test("fallbackmode: bypasses 27B model download and uses Groq directly", (
   assert(shouldDownload("qwen3.8-27b", false) === true, "27B download should proceed when fallback is off");
 });
 
-await test("fallbackmode: configures Groq Qwen 27B model (qwen/qwen3.8-27b)", () => {
-  assert(GROQ_QWEN_27B_MODEL === "qwen/qwen3.8-27b", `Expected qwen/qwen3.8-27b, got ${GROQ_QWEN_27B_MODEL}`);
-  assert(GROQ_QWEN_27B_MODEL.includes("qwen") && GROQ_QWEN_27B_MODEL.includes("27b"), "Model identifier must specify Qwen 27B");
+await test("fallbackmode: configures the default Groq hosted model", () => {
+  assert(GROQ_DEFAULT_MODEL === "openai/gpt-oss-120b", `Expected openai/gpt-oss-120b, got ${GROQ_DEFAULT_MODEL}`);
 });
 
 await test("fallbackmode: parseGroqSSEChunk extracts token deltas accurately", () => {
@@ -450,26 +449,26 @@ import { formatGroqError, streamGroqChat } from "../../room/groq-client.js";
 import groqProxyHandler from "../../api/groq.js";
 
 await test("groq: GROQ_MODEL_MAP contains all 5 required model mappings", () => {
-  assert(GROQ_MODEL_MAP["qwen3.8-27b"] === "qwen/qwen3-32b", "Qwen 3.8 27B should map to qwen/qwen3-32b");
-  assert(GROQ_MODEL_MAP["qwen2.5-coder-7b"] === "qwen/qwen3-32b", "Qwen2.5-Coder 7B should map to qwen/qwen3-32b");
-  assert(GROQ_MODEL_MAP["deepseek-r1-distill-qwen-14b"] === "deepseek-r1-distill-qwen-32b", "DeepSeek-R1 Distill Qwen 14B should map to deepseek-r1-distill-qwen-32b");
-  assert(GROQ_MODEL_MAP["qwq-32b"] === "qwen/qwen3-32b", "Qwen QwQ-32B should map to qwen/qwen3-32b");
-  assert(GROQ_MODEL_MAP["qwen3-4b"] === "llama-3.1-8b-instant", "Qwen3 4B should map to llama-3.1-8b-instant");
-  assert(GROQ_MODEL_MAP["qwen3-1.7b"] === "llama-3.1-8b-instant", "Qwen3 1.7B should map to llama-3.1-8b-instant");
-  assert(GROQ_MODEL_MAP["qwen3-0.6b"] === "llama-3.1-8b-instant", "Qwen3 0.6B should map to llama-3.1-8b-instant");
+  assert(GROQ_MODEL_MAP["qwen3.8-27b"] === "qwen/qwen3.8-27b");
+  assert(GROQ_MODEL_MAP["qwen2.5-coder-7b"] === "openai/gpt-oss-120b");
+  assert(GROQ_MODEL_MAP["deepseek-r1-distill-qwen-14b"] === "openai/gpt-oss-120b");
+  assert(GROQ_MODEL_MAP["qwq-32b"] === "openai/gpt-oss-120b");
+  assert(GROQ_MODEL_MAP["qwen3-4b"] === "openai/gpt-oss-20b");
+  assert(GROQ_MODEL_MAP["qwen3-1.7b"] === "openai/gpt-oss-20b");
+  assert(GROQ_MODEL_MAP["qwen3-0.6b"] === "openai/gpt-oss-20b");
 
-  assert(getGroqModelId("qwen3.8-27b") === "qwen/qwen3-32b");
-  assert(getGroqModelId("deepseek-r1-distill-qwen-14b") === "deepseek-r1-distill-qwen-32b");
+  assert(getGroqModelId("qwen3.8-27b") === "qwen/qwen3.8-27b");
+  assert(getGroqModelId("deepseek-r1-distill-qwen-14b") === "openai/gpt-oss-120b");
 });
 
 await test("groq: formatGroqError provides descriptive messages for 401, 404, 429", () => {
   const err401 = formatGroqError(401, { error: { message: "Invalid API Key" } }, "qwen3-32b");
   assert(err401.includes("Invalid Groq API Key (401)") && err401.includes("GROQ_API_KEY in .env"), "401 should mention invalid API key and .env");
 
-  const err404 = formatGroqError(404, { error: { message: "Model not found" } }, "qwen/qwen3-32b");
-  assert(err404.includes("Model \"qwen/qwen3-32b\" not found on Groq (404)"), "404 should name model and 404 status");
+  const err404 = formatGroqError(404, { error: { message: "Model not found" } }, "openai/gpt-oss-120b");
+  assert(err404.includes("Model \"openai/gpt-oss-120b\" not found on Groq (404)"), "404 should name model and 404 status");
 
-  const err429 = formatGroqError(429, { error: { message: "Rate limit reached" } }, "qwen/qwen3-32b");
+  const err429 = formatGroqError(429, { error: { message: "Rate limit reached" } }, "openai/gpt-oss-120b");
   assert(err429.includes("Groq rate limit exceeded (429)"), "429 should identify rate limit");
 });
 

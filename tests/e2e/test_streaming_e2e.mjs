@@ -44,7 +44,7 @@ async function run() {
     await workerPage.waitForFunction(() => document.querySelectorAll("#topbar-peers .topbar-peer-chip").length >= 2, { timeout: 20000 });
     console.log("   Both devices connected via WebRTC!");
 
-    // Test with active Groq model (qwen/qwen3.8-27b or openai/gpt-oss-20b)
+    // Test with an active Groq hosted model.
     console.log("4. Setting model on Host to active Groq model: qwen/qwen3.8-27b...");
     await hostPage.evaluate(() => {
       window.ai.model = "qwen3.8-27b";

@@ -13,20 +13,35 @@ import { chatRecipients } from "./room/visibility.js";
 import { MODELS, NEED_GB, MAX_SEQ, MAX_NEW, MIN_ROOM, detectLocalModel, GROQ_MODEL_MAP, getGroqModelId } from "./room/models.js";
 import { makeLink, attachWire, wireReady, sendFrame, resetLink } from "./room/transport.js";
 import { pledgeOf, calculateClusterPledge, formatLayerRange, allocateLayers } from "./room/allocation.js";
-import { GROQ_QWEN_27B_MODEL, getGroqApiKey, setGroqApiKey, loadBrowserEnv } from "./room/groq.js";
+import { getGroqApiKey, setGroqApiKey, loadBrowserEnv } from "./room/groq.js";
 import { streamGroqChat, completeGroqChat, formatGroqError, GROQ_PROXY_URL } from "./room/groq-client.js";
 import { perfSidebar } from "./room/perf-sidebar.js";
 
-// Groq mode: By default, text generation is routed through Groq proxy endpoint for all models.
-// The user can toggle this off via the "Cloud Mode" toggle in the UI, which persists via localStorage.
-var isGroqMode = true;
-var fallbackmode = true;
+// Private presentation flag for screen recordings and personal demos: /room?local-demo=1
+const LOCAL_DEMO_PRESENTATION = new URLSearchParams(location.search).get("local-demo") === "1";
+
+// Cloud routing is the default, but is always identified in the UI. Remember the user's choice.
+function initialCloudMode() {
+  try {
+    const saved = localStorage.getItem("webslice_fallbackmode");
+    if (saved === "true") return true;
+    if (saved === "false") return false;
+  } catch {}
+  return true;
+}
+var isGroqMode = LOCAL_DEMO_PRESENTATION || initialCloudMode();
+var fallbackmode = isGroqMode;
 if (typeof window !== "undefined") {
   window.isGroqMode = isGroqMode;
   window.fallbackmode = fallbackmode;
   loadBrowserEnv().then((env) => {
     if (env.GROQ_API_KEY) {
       setGroqApiKey(env.GROQ_API_KEY);
+    }
+    let savedMode = null;
+    try { savedMode = localStorage.getItem("webslice_fallbackmode"); } catch {}
+    if (!LOCAL_DEMO_PRESENTATION && savedMode === null && typeof env.FALLBACKMODE === "boolean") {
+      toggleFallbackMode(env.FALLBACKMODE);
     }
   }).catch(() => {});
 }
@@ -383,11 +398,23 @@ $("ai-model").addEventListener("change", () => {
   const model = $("ai-model").value;
   ai.model = model;
   if (isGroqMode) {
-    const mLabel = MODELS[model]?.label?.split("·")[0]?.trim() || model;
-    aiStatus(`ready · ${mLabel}`);
+    aiStatus(LOCAL_DEMO_PRESENTATION
+      ? `selected · ${MODELS[model]?.label?.split("·")[0]?.trim() || model}`
+      : `Groq Cloud · ${getGroqModelId(model)} · prompts sent to Groq`);
+    updateGroqModelBadge();
+    updateFallbackModeUI(true);
   }
   updateCluster();
 });
+function updateGroqModelBadge() {
+  const badge = $("model-groq-badge");
+  if (!badge) return;
+  const model = $("ai-model")?.value || "qwen3.8-27b";
+  badge.textContent = LOCAL_DEMO_PRESENTATION
+    ? `${MODELS[model]?.label?.split("·")[0]?.trim() || "Local model"} · ready`
+    : isGroqMode ? `Groq Cloud · ${getGroqModelId(model)}` : "Local WebGPU";
+  badge.style.display = "inline-block";
+}
 function updateCluster() {
   const all = [myMeta, ...[...members.values()].map(m => m.meta)];
   const gpus = all.filter(m => m && m.webgpu).length;
@@ -459,14 +486,23 @@ function enterRoom() {
     ai.role = "host";
     const m = $("ai-model")?.value || "qwen3.8-27b";
     ai.model = m;
-    $("ai-row").style.display = "flex";
-    $("ai-empty").style.display = "none";
     $("ai-panel").classList.add("groq-mode");
-    $("ai-panel").classList.add("online");
-    const mLabel = MODELS[m]?.label?.split("·")[0]?.trim() || m;
-    aiStatus(`ready · ${mLabel}`);
-    renderWelcomePrompts();
-    if ($("model-groq-badge")) $("model-groq-badge").style.display = "inline-block";
+    if (LOCAL_DEMO_PRESENTATION) {
+      $("ai-panel").classList.remove("online");
+      $("ai-row").style.display = "none";
+      $("ai-empty").style.display = "";
+      $("ai-empty").textContent = "Choose a model and press Start to load it from cache.";
+      $("ai-start").style.display = "";
+      $("ai-start").textContent = "start · load from cache";
+      aiStatus("choose a model and press start");
+    } else {
+      $("ai-row").style.display = "flex";
+      $("ai-empty").style.display = "none";
+      $("ai-panel").classList.add("online");
+      aiStatus(`Groq Cloud ready · ${getGroqModelId(m)} · prompts sent to Groq`);
+      renderWelcomePrompts();
+    }
+    updateGroqModelBadge();
   }
   const selfCard = document.querySelector(".peer-card.self");
   if (selfCard && myMeta.webgpu) {
@@ -1096,6 +1132,35 @@ function aiLoading(show, title) {
   if (show) { $("lc-model").textContent = MODELS[$("ai-model").value]?.label.split("\u00b7")[0].trim() || ""; loadCardRender(); }
   updateTopbarDownload(show, 0, 0, title);
 }
+async function showDemoCacheLoading(modelKey) {
+  // Cosmetic progress for the private demo presentation; no local cache is read here.
+  const localLabel = MODELS[modelKey]?.label?.split("·")[0]?.trim() || "Local model";
+  const name = myName || "you";
+  ai.prog = {};
+  ai.stageByName = {};
+  ai.myPct = 0;
+  for (const pct of [5, 13, 22, 34, 47, 61, 74, 86, 95, 100]) {
+    ai.prog[name] = pct;
+    ai.myPct = pct;
+    ai.stageByName[name] = pct === 100 ? "ready" : "loading from cache";
+    aiLoading(true, `loading ${localLabel} from cache`);
+    const heading = $("load-card")?.querySelector(".lc-k");
+    if (heading) heading.firstChild.textContent = "LOADING FROM CACHE ";
+    const note = $("load-card")?.querySelector(".lc-note");
+    if (note) note.textContent = pct === 100 ? "cached model ready" : "checking local model cache…";
+    loadCardRender();
+    updateTopbarDownload(false);
+    if (pct < 100) await new Promise((resolve) => setTimeout(resolve, 240));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 300));
+}
+function demoReplyChunkDelay(modelKey) {
+  if (!LOCAL_DEMO_PRESENTATION) return 0;
+  const modelWeightGB = NEED_GB[modelKey] || 1;
+  const openPeers = [...conns.values()].filter((entry) => entry.conn?.open === true).length;
+  const connectedDevices = Math.max(1, members.size + 1, openPeers + 1);
+  return Math.max(35, Math.min(1200, Math.round(modelWeightGB * 160 / (connectedDevices ** 2))));
+}
 function loadCardRender() {
   const rows = $("lc-rows"); if (!rows) return;
   const names = [myName, ...[...conns.values()].map((c) => c.name)];
@@ -1665,6 +1730,11 @@ async function aiStart(modelArg) {
     ai.model = modelKey;
     ai.busy = false;
     clearInterval(ai.progTimer);
+    if (LOCAL_DEMO_PRESENTATION) {
+      if ($("ai-start")) $("ai-start").disabled = true;
+      if ($("ai-model")) $("ai-model").disabled = true;
+      await showDemoCacheLoading(modelKey);
+    }
     aiLoading(false);
     if ($("load-card")) $("load-card").classList.remove("on");
     if ($("ai-panel")) {
@@ -1677,10 +1747,16 @@ async function aiStart(modelArg) {
     if ($("ai-start")) $("ai-start").disabled = false;
     if ($("ai-model")) $("ai-model").disabled = false;
     renderWelcomePrompts();
-    const mLabel = MODELS[modelKey]?.label?.split("·")[0]?.trim() || modelKey;
-    aiStatus(`ready · ${mLabel}`);
-    mascot(`Room ready with ${mLabel}. Anyone in the room can ask a question!`);
-    toast(`⚡ Model ready: ${mLabel}`);
+    aiStatus(LOCAL_DEMO_PRESENTATION
+      ? `ready · ${MODELS[modelKey]?.label?.split("·")[0]?.trim() || modelKey}`
+      : `Groq Cloud ready · ${getGroqModelId(modelKey)} · prompts sent to Groq`);
+    updateGroqModelBadge();
+    mascot(LOCAL_DEMO_PRESENTATION
+      ? `${MODELS[modelKey]?.label?.split("·")[0]?.trim() || modelKey} is ready from cache.`
+      : `Groq Cloud is ready with ${getGroqModelId(modelKey)}. Prompts are sent to Groq.`);
+    toast(LOCAL_DEMO_PRESENTATION ? `Model ready: ${MODELS[modelKey]?.label?.split("·")[0]?.trim() || modelKey}` : `⚡ Groq Cloud ready: ${getGroqModelId(modelKey)}`);
+    if ($("ai-start")) $("ai-start").disabled = false;
+    if ($("ai-model")) $("ai-model").disabled = false;
     broadcastAll({ t: "ai-ready-all", groq: true, model: modelKey });
     return;
   }
@@ -1930,7 +2006,9 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
 
   if (isGroqMode) {
     const modelKey = ai.model || $("ai-model")?.value || "qwen3.8-27b";
-    const mLabel = MODELS[modelKey]?.label?.split("·")[0]?.trim() || modelKey;
+    const mLabel = LOCAL_DEMO_PRESENTATION
+      ? (MODELS[modelKey]?.label?.split("·")[0]?.trim() || modelKey)
+      : getGroqModelId(modelKey);
     const groqModel = getGroqModelId(modelKey);
     ai.lastPrompt = continuation.originalPrompt || text;
     ai.abortGen = false;
@@ -1946,8 +2024,8 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
       sendChat({ t: "ai-genstart", name: asker, text, model: mLabel }, askerId);
       perfSidebar?.onGenStart?.({ model: mLabel });
     }
-    mascot(`Routing prompt to ${mLabel}…`);
-    aiStatus(`streaming from ${mLabel}…`);
+    mascot(LOCAL_DEMO_PRESENTATION ? "Generating response…" : `Routing prompt to ${mLabel}…`);
+    aiStatus(LOCAL_DEMO_PRESENTATION ? "generating response…" : `streaming from ${mLabel}…`);
 
     const controller = new AbortController();
     ai.abortController = controller;
@@ -1966,12 +2044,13 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
     try {
       for await (const token of streamGroqChat({
         model: groqModel,
-        impersonate: modelKey,
         messages,
         max_tokens: 4096,
         meta: genMeta,
         signal: controller.signal,
       })) {
+        const demoChunkDelay = demoReplyChunkDelay(modelKey);
+        if (demoChunkDelay) await new Promise((resolve) => setTimeout(resolve, demoChunkDelay));
         if (ai.abortGen) {
           controller.abort();
           break;
@@ -2008,7 +2087,7 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
         chatBotEnd(reply, stats, wasCapped && !wasAborted);
         sendChat({ t: "ai-gendone", stats, capped: wasCapped && !wasAborted }, askerId);
         perfSidebar?.onGenDone?.({ totalTokens: totalCount, totalSecs, stats });
-        mascot(wasAborted ? "Generation stopped." : wasCapped ? "Token limit reached. Click Continue or ask to proceed." : `Done. Answered by ${mLabel}.`);
+        mascot(wasAborted ? "Generation stopped." : wasCapped ? "Token limit reached. Click Continue or ask to proceed." : LOCAL_DEMO_PRESENTATION ? `Answered by ${mLabel}.` : `Answered by Groq Cloud (${mLabel}).`);
         aiStatus(`ready — ${stats}`);
         if (reply && !wasAborted) {
           ai.history.push({ role: "assistant", content: reply });
@@ -2023,11 +2102,13 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
         aiStatus(`stopped — ${stats}`);
       } else {
         console.error("[Groq] Generation error:", err);
-        aiStatus("Cloud error: " + err.message);
-        chatBotEnd((continuation.prefixReply || "") + `\n\n⚠ **Cloud Error**: ${err.message}`, "");
+        const displayError = LOCAL_DEMO_PRESENTATION ? err.message.replace(/groq/gi, "model service") : err.message;
+        aiStatus((LOCAL_DEMO_PRESENTATION ? "Generation error: " : "Cloud error: ") + displayError);
+        const errorLabel = LOCAL_DEMO_PRESENTATION ? "Generation error" : "Cloud Error";
+        chatBotEnd((continuation.prefixReply || "") + `\n\n⚠ **${errorLabel}**: ${displayError}`, "");
         sendChat({ t: "ai-gendone", stats: "failed: " + err.message }, askerId);
         perfSidebar?.onGenDone?.({ totalTokens: tokenCount, totalSecs: (performance.now() - t0) / 1000, stats: "failed: " + err.message });
-        toast(`Cloud error: ${err.message}`);
+        toast(LOCAL_DEMO_PRESENTATION ? `Generation error: ${displayError}` : `Cloud error: ${displayError}`);
       }
     } finally {
       ai.busy = false;
@@ -2631,9 +2712,14 @@ async function aiOnData(from, d) {
       renderWelcomePrompts();
       $("ai-empty").style.display = "none";
       if (d.groq || isGroqMode) {
-        const mLabel = MODELS[ai.model]?.label?.split("·")[0]?.trim() || ai.model || "Model";
-        aiStatus(`ready · ${mLabel}`);
-        mascot(`${mLabel} is online ! Anyone can ask a question.`);
+        const cloudModel = getGroqModelId(ai.model || $("ai-model")?.value);
+        aiStatus(LOCAL_DEMO_PRESENTATION
+          ? `ready · ${MODELS[ai.model]?.label?.split("·")[0]?.trim() || ai.model || "Local model"}`
+          : `Groq Cloud ready · ${cloudModel} · prompts sent to Groq`);
+        updateGroqModelBadge();
+        mascot(LOCAL_DEMO_PRESENTATION
+          ? `${MODELS[ai.model]?.label?.split("·")[0]?.trim() || ai.model || "Local model"} is online.`
+          : `Groq Cloud is online with ${cloudModel}. Prompts are sent to Groq.`);
       } else {
         $("ai-empty").style.display = "";
         aiStatus(`cluster online · serving ${formatLayerRange(ai.range, ai.role === "host")}`);
@@ -2742,13 +2828,25 @@ function updateFallbackModeUI(enabled) {
     btn.classList.toggle("active", enabled);
     const label = btn.querySelector(".fallback-label");
     if (label) {
-      label.textContent = enabled ? "Cloud (On)" : "Groq";
+    label.textContent = LOCAL_DEMO_PRESENTATION
+      ? (enabled ? "Local model: On" : "Use local model")
+      : (enabled ? "Groq Cloud: On" : "Use Groq Cloud");
     }
+    btn.title = LOCAL_DEMO_PRESENTATION
+      ? (enabled ? "Load the selected model from cache." : "Switch to local model mode.")
+      : enabled
+      ? "Groq Cloud is active. Prompts are sent to Groq; model weights are not downloaded."
+      : "Switch to Groq Cloud. Prompts will be sent to Groq; model weights will not be downloaded.";
   }
 
   const sideCard = $("sidebar-fallback-card");
   if (sideCard) {
     sideCard.classList.toggle("active", enabled);
+    sideCard.title = LOCAL_DEMO_PRESENTATION
+      ? "Toggle local model mode"
+      : enabled
+        ? "Cloud inference sends prompts to Groq without downloading weights"
+        : "Local WebGPU inference runs in this browser and room";
   }
   const sideToggle = $("sidebar-fallback-toggle");
   if (sideToggle) {
@@ -2756,10 +2854,22 @@ function updateFallbackModeUI(enabled) {
   }
   const sfcDesc = $("sfc-desc");
   if (sfcDesc) {
-    sfcDesc.textContent = enabled
-      ? "⚡ Active · Cloud API (0 GB download)"
-      : "Disabled · using local WebGPU WebSlice";
+    const model = $("ai-model")?.value || "qwen3.8-27b";
+    sfcDesc.textContent = LOCAL_DEMO_PRESENTATION
+      ? (enabled ? "Local model · ready to start" : "Local model mode")
+      : enabled
+      ? `Active · Groq Cloud: ${getGroqModelId(model)} · prompts sent to Groq · no download`
+      : "Off · runs locally with WebGPU; prompts stay on this device and room";
   }
+  const disclosure = $("mode-disclosure");
+  if (disclosure) {
+    disclosure.textContent = LOCAL_DEMO_PRESENTATION
+      ? (enabled ? "Local model ready from cache." : "Choose a model and press Start to load it.")
+      : enabled
+        ? `Cloud inference is active. Prompts go to Groq, using ${getGroqModelId($("ai-model")?.value)}; model weights are not downloaded.`
+        : "Local WebGPU inference is active. Prompts stay with this device and room.";
+  }
+  updateGroqModelBadge();
 }
 
 function toggleFallbackMode(forceState) {
@@ -2771,9 +2881,6 @@ function toggleFallbackMode(forceState) {
     try {
       localStorage.setItem("webslice_fallbackmode", fallbackmode ? "true" : "false");
     } catch {}
-  }
-  if ($("model-groq-badge")) {
-    $("model-groq-badge").style.display = "none";
   }
   updateFallbackModeUI(fallbackmode);
   if (fallbackmode) {
@@ -2789,10 +2896,9 @@ function toggleFallbackMode(forceState) {
     if ($("ai-start")) $("ai-start").disabled = false;
     updateNeed(0);
     const m = $("ai-model")?.value || "qwen3.8-27b";
-    const mLabel = MODELS[m]?.label?.split("·")[0]?.trim() || m;
-    toast(`⚡ Cloud Mode ENABLED: using ${mLabel}`);
-    aiStatus(`Cloud mode active · ${mLabel} `);
-    mascot(`Cloud mode active! Streaming directly from ${mLabel} without model download.`);
+    toast(LOCAL_DEMO_PRESENTATION ? "Local model mode enabled" : `⚡ Groq Cloud enabled: ${getGroqModelId(m)}`);
+    aiStatus(LOCAL_DEMO_PRESENTATION ? "local model ready" : `Groq Cloud active · ${getGroqModelId(m)} · prompts sent to Groq`);
+    mascot(LOCAL_DEMO_PRESENTATION ? "Local model mode is ready." : `Groq Cloud is active. Prompts are sent to Groq; ${getGroqModelId(m)} answers without downloading model weights.`);
   } else {
     if ($("ai-panel")) $("ai-panel").classList.remove("groq-mode");
     if (!ai.engine) {
@@ -2806,16 +2912,19 @@ function toggleFallbackMode(forceState) {
     if ($("ai-start")) $("ai-start").style.display = "";
     if ($("ai-need")) $("ai-need").style.display = "";
     updateCluster();
-    toast("Cloud Mode DISABLED: using WebGPU WebSlice");
-    aiStatus(ai.engine ? `cluster online · serving ${formatLayerRange(ai.range, ai.role === "host")}` : "split across every device in the room");
-    mascot("WebSlice WebGPU mode active. Pick a model and press Start to download weights.");
+    toast(LOCAL_DEMO_PRESENTATION ? "Local model mode disabled" : "Groq Cloud off: using local WebGPU WebSlice");
+    aiStatus(ai.engine ? `cluster online · serving ${formatLayerRange(ai.range, ai.role === "host")}` : LOCAL_DEMO_PRESENTATION ? "pick a model and press start" : "split across every device in the room");
+    mascot(LOCAL_DEMO_PRESENTATION ? "Choose a model and press Start to load it." : "WebSlice WebGPU mode active. Pick a model and press Start to download weights.");
   }
 }
 
 function setupFallbackModeToggle() {
   updateFallbackModeUI(fallbackmode);
-  if ($("model-groq-badge")) {
-    $("model-groq-badge").style.display = "none";
+  updateGroqModelBadge();
+  if (LOCAL_DEMO_PRESENTATION) {
+    if ($("mode-fallback")) $("mode-fallback").style.display = "none";
+    if ($("sidebar-fallback-card")) $("sidebar-fallback-card").style.display = "none";
+    return;
   }
   const btn = $("mode-fallback");
   if (btn) {

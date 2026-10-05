@@ -1,5 +1,5 @@
 // Groq API integration for webslice
-// Model: Qwen 27B and mapped cluster models
+// Groq Cloud model used when no model is explicitly selected.
 import {
   GROQ_PROXY_URL,
   GROQ_DIRECT_URL,
@@ -16,7 +16,7 @@ export {
   parseGroqSSEChunk,
 };
 
-export const GROQ_QWEN_27B_MODEL = "qwen/qwen3.8-27b";
+export const GROQ_DEFAULT_MODEL = "qwen/qwen3.8-27b";
 export const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 /**
@@ -109,7 +109,7 @@ export async function streamGroqChat(opts) {
   for await (const piece of clientStreamGroqChat({
     ...opts,
     apiKey: key,
-    model: opts.model || GROQ_QWEN_27B_MODEL,
+    model: opts.model || GROQ_DEFAULT_MODEL,
     onToken: (tok, currentFull) => {
       full = currentFull;
       if (opts.onToken) opts.onToken(tok, currentFull);
@@ -129,6 +129,6 @@ export async function completeGroqChat(opts) {
   }
   return clientCompleteGroqChat({
     ...opts,
-    model: opts.model || GROQ_QWEN_27B_MODEL,
+    model: opts.model || GROQ_DEFAULT_MODEL,
   });
 }

@@ -91,7 +91,6 @@ export function parseGroqSSEChunk(chunk, onToken) {
  */
 export async function* streamGroqChat({
   model,
-  impersonate,
   messages,
   prompt,
   endpoint,
@@ -127,7 +126,6 @@ export async function* streamGroqChat({
       headers,
       body: JSON.stringify({
         model,
-        impersonate,
         messages: msgs,
         stream: true,
         temperature,
@@ -144,7 +142,6 @@ export async function* streamGroqChat({
           headers,
           body: JSON.stringify({
             model,
-            impersonate,
             messages: msgs,
             stream: true,
             temperature,
@@ -169,7 +166,6 @@ export async function* streamGroqChat({
         headers,
         body: JSON.stringify({
           model,
-          impersonate,
           messages: msgs,
           stream: true,
           temperature,

@@ -54,44 +54,25 @@ function readJsonBody(req) {
   });
 }
 
-const GROQ_MODEL_ALIASES = {
-  // Map to active high-capacity Groq models (8,000 TPM vs 1,000 OTPM on qwen)
-  "llama-3.1-8b-instant": "openai/gpt-oss-20b",
-  "qwen/qwen3-32b": "openai/gpt-oss-120b",
-  "deepseek-r1-distill-qwen-32b": "openai/gpt-oss-120b",
-  "qwen/qwen3.8-27b": "openai/gpt-oss-120b",
-
-  // Model keys directly from room/models.js
-  "qwen3.8-27b": "openai/gpt-oss-120b",
-  "qwen2.5-coder-7b": "openai/gpt-oss-120b",
-  "qwen2.5-coder-1.5b": "openai/gpt-oss-20b",
-  "deepseek-r1-distill-qwen-14b": "openai/gpt-oss-120b",
-  "qwq-32b": "openai/gpt-oss-120b",
-  "qwen3-4b": "openai/gpt-oss-20b",
-  "qwen3-1.7b": "openai/gpt-oss-20b",
-  "qwen3-0.6b": "openai/gpt-oss-20b",
-  "phi-4-mini": "openai/gpt-oss-20b",
-  "smollm-135m": "openai/gpt-oss-20b",
-};
-
-const MODEL_PERSONAS = {
-  // Universal Qwen impersonation requested by user
-  "default": "You are a large language model created by Alibaba Cloud. You are an expert AI assistant that answers questions accurately and helpfully."
-};
-
-function prepareMessagesWithPersona(messages, personaKey) {
-  if (!personaKey) return messages;
-  const persona = MODEL_PERSONAS["default"];
-  if (!persona) return messages;
-  const hasSystem = messages.some(m => m.role === "system");
-  if (!hasSystem) {
-    return [{ role: "system", content: persona }, ...messages];
+async function fetchGroqWithRetry(url, options, retries = 2) {
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetch(url, options);
+    } catch (err) {
+      lastError = err;
+      if (attempt < retries) {
+        await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+      }
+    }
   }
-  return messages;
+  const causeCode = lastError?.cause?.code;
+  const detail = causeCode ? `${lastError.message} (${causeCode})` : lastError?.message || "unknown network error";
+  throw new Error(`Groq connection failed after ${retries + 1} attempts: ${detail}`, { cause: lastError });
 }
 
 async function executeGroqCompletion({ apiKey, model, messages, temperature, max_tokens }) {
-  const resolvedModel = GROQ_MODEL_ALIASES[model] || model;
+  const resolvedModel = model;
   const reqMaxTokens = typeof max_tokens === "number" && max_tokens > 0
     ? Math.min(max_tokens, 8192)
     : 4096;
@@ -104,7 +85,7 @@ async function executeGroqCompletion({ apiKey, model, messages, temperature, max
     max_tokens: reqMaxTokens,
   };
 
-  let resp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+  let resp = await fetchGroqWithRetry("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${apiKey}`,
@@ -127,7 +108,7 @@ async function executeGroqCompletion({ apiKey, model, messages, temperature, max
       : "openai/gpt-oss-20b";
     const retryTokens = reqMaxTokens > 2048 ? 2048 : (reqMaxTokens > 1000 ? 1000 : reqMaxTokens);
 
-    let retryResp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    let retryResp = await fetchGroqWithRetry("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
@@ -141,7 +122,7 @@ async function executeGroqCompletion({ apiKey, model, messages, temperature, max
     }
 
     // Tier 2 fallback: allam-2-7b (7000 RPM, 6000 TPM limit)
-    let finalResp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    let finalResp = await fetchGroqWithRetry("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
@@ -199,9 +180,9 @@ async function handleWebRequest(request) {
     );
   }
 
-  const { model, impersonate, messages, prompt, temperature, max_tokens } = bodyData;
+  const { model, messages, prompt, temperature, max_tokens } = bodyData;
   const rawMsgs = messages || (prompt ? [{ role: "user", content: prompt }] : []);
-  const msgs = prepareMessagesWithPersona(rawMsgs, impersonate || model);
+  const msgs = rawMsgs;
 
   if (!model) {
     return new Response(
@@ -293,9 +274,9 @@ export default async function handler(req, res) {
     }
   }
 
-  const { model, impersonate, messages, prompt, temperature, max_tokens } = bodyData;
+  const { model, messages, prompt, temperature, max_tokens } = bodyData;
   const rawMsgs = messages || (prompt ? [{ role: "user", content: prompt }] : []);
-  const msgs = prepareMessagesWithPersona(rawMsgs, impersonate || model);
+  const msgs = rawMsgs;
 
   if (!model) {
     res.statusCode = 400;

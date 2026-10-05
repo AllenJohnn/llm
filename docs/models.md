@@ -29,4 +29,4 @@ models/
 3. Generate a golden with the reference implementation in `tests/reference/` and add a test.
 4. Record tok/s in `docs/bench-log.md`.
 
-> **Note on Groq-backed models**: For models served via Groq (`qwen/qwen3-32b`, `deepseek-r1-distill-qwen-32b`, `llama-3.1-8b-instant`), this GGUF flow is completely bypassed. Because text generation routes through the Groq client and proxy endpoint instead of local WebGPU weight loading, no local tensor mapping, weight downloading, or golden reference tests in `tests/reference/` are required.
+> **Note on Groq Cloud mode**: The room model picker maps each local model choice to a hosted Groq model. The interface shows the actual Groq model and discloses that prompts are sent to Groq. This mode skips the GGUF download and local WebGPU path. Turn Groq Cloud off to download and run local weights.

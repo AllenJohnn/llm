@@ -952,24 +952,24 @@ window.sliceStart = function(create) {
         <option value="phi-4-mini">Phi-4 mini · Q4 (coding &amp; reasoning)</option>
         <option value="qwen3.8-27b">Qwen 3.8 27B · Q4</option>
       </select>
-      <div class="sidebar-fallback-card" id="sidebar-fallback-card" title="Toggle fallback mode">
+      <div class="sidebar-fallback-card" id="sidebar-fallback-card" title="Choose local or cloud model mode">
         <div class="sfc-header">
           <div class="sfc-title-row">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="sfc-icon"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-            <span>Fallback mode</span>
+            <span>Model mode</span>
           </div>
-          <button type="button" class="sfc-toggle" id="sidebar-fallback-toggle" aria-label="Toggle fallback mode">
+          <button type="button" class="sfc-toggle" id="sidebar-fallback-toggle" aria-label="Toggle Groq Cloud mode">
             <span class="sfc-toggle-thumb"></span>
           </button>
         </div>
-        <div class="sfc-desc" id="sfc-desc">● <b>Distributed Local</b><br><span style="opacity:0.8;font-size: 12.5px">WebGPU + peer inference</span></div>
+        <div class="sfc-desc" id="sfc-desc">Choose how this model runs</div>
       </div>
       <div id="ai-need">
         <div id="need-bar"><div id="need-fill"></div></div>
         <div id="need-text">needs ~0.8 GB · room gives 0 GB</div>
       </div>
       <span id="ai-status">split across every device in the room</span>
-      <div class="side-hint" style="margin-top:2px">drop .gguf in ./models/ to bypass downloads</div>
+      <div class="side-hint" id="mode-disclosure" style="margin-top:2px">Choose how this model runs.</div>
       <button id="ai-start" class="primary">start</button>
     </div>
     <div id="host-controls" class="host-section" hidden>
@@ -1015,9 +1015,9 @@ window.sliceStart = function(create) {
                 <span>Deep Think</span>
               </button>
             </div>
-            <button type="button" class="fallback-mode-btn" id="mode-fallback" title="Toggle fallback mode">
+            <button type="button" class="fallback-mode-btn" id="mode-fallback" title="Toggle model mode">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-              <span class="fallback-label">Fallback off</span>
+              <span class="fallback-label">Model mode</span>
             </button>
             <div class="sender-hint"><span class="kbd-hint">↵ Send</span><span class="kbd-hint">⇧↵ New line</span></div>
           </div>

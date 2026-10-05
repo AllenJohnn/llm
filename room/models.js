@@ -14,20 +14,23 @@ export const NEED_GB = {
   "smollm-135m": 0.3,
 };
 
-// Mapping from room model keys to Groq-hosted model IDs
+// Cloud choices are model mappings, not the local weights named in the picker.
+// Keep the actual Groq model IDs visible in the UI and send those IDs unchanged.
 export const GROQ_MODEL_MAP = {
-  "qwen3.8-27b": "qwen/qwen3-32b",
-  "qwen2.5-coder-7b": "qwen/qwen3-32b",
-  "qwen2.5-coder-1.5b": "qwen/qwen3-32b",
-  "deepseek-r1-distill-qwen-14b": "deepseek-r1-distill-qwen-32b",
-  "qwq-32b": "qwen/qwen3-32b",
-  "qwen3-4b": "llama-3.1-8b-instant",
-  "qwen3-1.7b": "llama-3.1-8b-instant",
-  "qwen3-0.6b": "llama-3.1-8b-instant",
+  "qwen3.8-27b": "qwen/qwen3.8-27b",
+  "qwen2.5-coder-7b": "openai/gpt-oss-120b",
+  "qwen2.5-coder-1.5b": "openai/gpt-oss-20b",
+  "deepseek-r1-distill-qwen-14b": "openai/gpt-oss-120b",
+  "qwq-32b": "openai/gpt-oss-120b",
+  "qwen3-4b": "openai/gpt-oss-20b",
+  "qwen3-1.7b": "openai/gpt-oss-20b",
+  "qwen3-0.6b": "openai/gpt-oss-20b",
+  "phi-4-mini": "openai/gpt-oss-20b",
+  "smollm-135m": "openai/gpt-oss-20b",
 };
 
 export function getGroqModelId(modelKey) {
-  return GROQ_MODEL_MAP[modelKey] || modelKey || "qwen/qwen3-32b";
+  return GROQ_MODEL_MAP[modelKey] || "openai/gpt-oss-120b";
 }
 
 export const MODELS = {

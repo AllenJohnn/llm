@@ -48,7 +48,7 @@ await import('./room.js');
 setTimeout(async () => {
   console.log('--- STARTING GENERATION ---');
   window.fallbackMode = true;
-  document.getElementById('ai-model').value = 'llama-3.1-8b-instant'; // ensure valid groq model
+  document.getElementById('ai-model').value = 'qwen3.8-27b'; // local picker choice maps to a Groq model in cloud mode
   document.getElementById('ai-prompt').value = 'hi';
   
   // mock some missing functions
