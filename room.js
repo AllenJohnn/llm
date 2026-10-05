@@ -2021,8 +2021,9 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
     if (!continuation.isContinuation) {
       chatUser(asker, text);
       chatBotStart();
-      sendChat({ t: "ai-genstart", name: asker, text, model: mLabel }, askerId);
-      perfSidebar?.onGenStart?.({ model: mLabel });
+      const deviceCount = perfSidebar?.devices?.length || 1;
+      sendChat({ t: "ai-genstart", name: asker, text, model: mLabel, deviceCount }, askerId);
+      perfSidebar?.onGenStart?.({ model: mLabel, deviceCount });
     }
     mascot(LOCAL_DEMO_PRESENTATION ? "Generating response…" : `Routing prompt to ${mLabel}…`);
     aiStatus(LOCAL_DEMO_PRESENTATION ? "generating response…" : `streaming from ${mLabel}…`);
@@ -2190,8 +2191,9 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
     chatUser(asker, text);
     chatBotStart();
     const modelLabel = MODELS[ai.model]?.label?.split("·")[0]?.trim() || ai.model;
-    sendChat({ t: "ai-genstart", name: asker, text, model: modelLabel }, askerId);
-    perfSidebar?.onGenStart?.({ model: modelLabel });
+    const deviceCount = perfSidebar?.devices?.length || 1;
+    sendChat({ t: "ai-genstart", name: asker, text, model: modelLabel, deviceCount }, askerId);
+    perfSidebar?.onGenStart?.({ model: modelLabel, deviceCount });
   }
   mascot("Thinking… every word is taking a lap through the room.");
   aiStatus(`prefill: ${ids.length} tokens…`);
@@ -2683,7 +2685,7 @@ async function aiOnData(from, d) {
       chatBotStart();
       setSendButtonState("stop");
       mascot(`${d.name} asked something. Thinking…`);
-      perfSidebar?.onGenStart?.({ model: d.model || (MODELS[ai.model]?.label?.split("·")[0]?.trim() || ai.model) });
+      perfSidebar?.onGenStart?.({ model: d.model || (MODELS[ai.model]?.label?.split("·")[0]?.trim() || ai.model), deviceCount: d.deviceCount });
       break;
     case "ai-token":
       ai.remoteReply = (ai.remoteReply || "") + d.text;

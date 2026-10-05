@@ -40,6 +40,8 @@ git clone https://github.com/AllenJohnn/llm && cd llm
 npx -y serve -l 8080 .        # any static server works; then open http://localhost:8080/room
 ```
 
+**Serve through your own Cloudflare subdomain:** create a remotely managed Cloudflare Tunnel and add a Published application route for your subdomain pointing to `http://localhost:8080`. Put its tunnel token in the ignored local `.env` file as `CLOUDFLARE_TUNNEL_TOKEN=<token>`, then run `npm run serve`. This starts the app server and Cloudflare Tunnel together; without that setting, it starts locally only. Keep the token private. The hostname is public unless you protect it with a Cloudflare Access policy.
+
 **Hack on the engine** (needs [Deno](https://deno.com) 2.x and a WebGPU-capable GPU; model files go under `models/`, see [docs/models.md](docs/models.md)):
 
 ```bash

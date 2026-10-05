@@ -17,8 +17,10 @@ export class PerfSidebar {
     this.container = null;
     this.liveCanvas = null;
     this.scalingCanvas = null;
+    this.sessionCanvas = null;
     this.liveCtx = null;
     this.scalingCtx = null;
+    this.sessionCtx = null;
     
     // Live stream state
     this.isStreaming = false;
@@ -64,6 +66,19 @@ export class PerfSidebar {
     this.promptCount = 0;
     this.totalGenerationTime = 0;
     this.currentModel = "";
+    this.currentDeviceCount = 1;
+    this.sessionHistory = [];
+    this.sessionStorageKey = "webslice_perf_history_v1";
+    try {
+      const saved = sessionStorage.getItem(this.sessionStorageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) this.sessionHistory = parsed;
+      }
+    } catch {}
+    this.sessionTokens = this.sessionHistory.reduce((sum, item) => sum + (Number(item.tokens) || 0), 0);
+    this.promptCount = this.sessionHistory.length;
+    this.totalGenerationTime = this.sessionHistory.reduce((sum, item) => sum + (Number(item.seconds) || 0), 0);
 
     // Scalability benchmark curve (Nodes vs Throughput Multiplier / Speed)
     // Strictly in increasing order to demonstrate multi-system efficiency
@@ -81,6 +96,7 @@ export class PerfSidebar {
     this.updateDeviceListUI();
     this.renderScalingChart();
     this.renderLiveChart();
+    this.renderSessionChart();
   }
 
   setDevices(newDevices) {
@@ -102,6 +118,7 @@ export class PerfSidebar {
     this.updateDeviceListUI();
     this.renderScalingChart();
     this.renderLiveChart();
+    this.renderSessionChart();
   }
 
   injectStyles() {
@@ -630,6 +647,41 @@ export class PerfSidebar {
         color: var(--muted);
       }
 
+      .perf-session-history {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        margin-top: 7px;
+      }
+      .perf-history-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 2px 8px;
+        padding: 6px 8px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--panel);
+      }
+      .perf-history-main, .perf-history-sub {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .perf-history-main { color: var(--text); font-size: 10.5px; }
+      .perf-history-sub { grid-column: 1 / -1; color: var(--muted); font-size: 9.5px; }
+      .perf-history-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        flex: none;
+      }
+      .perf-history-empty {
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.4;
+        padding: 4px 0;
+      }
+
       /* Summary List */
       .perf-summary-list {
         display: flex;
@@ -802,6 +854,20 @@ export class PerfSidebar {
       <!-- Session Aggregates -->
       <div class="perf-section" style="margin-top: auto; border-bottom: none;">
         <div class="perf-sec-label">
+          <span>SESSION DEVICE COMPARISON</span>
+          <span class="perf-unit">TOKENS / CHAT</span>
+        </div>
+        <div class="perf-desc">Average speed, peak speed, answer size, and chat count grouped by connected device count.</div>
+        <div class="perf-canvas-wrap" style="height: 190px;">
+          <canvas id="perf-session-canvas" width="298" height="190" aria-label="Session performance radar chart grouped by device count"></canvas>
+          <div class="perf-canvas-empty" id="perf-session-empty">Send a chat to start a session comparison</div>
+        </div>
+        <div class="perf-session-history" id="perf-session-history" aria-live="polite"></div>
+      </div>
+
+      <!-- Session Aggregates -->
+      <div class="perf-section" style="border-bottom: none;">
+        <div class="perf-sec-label">
           <span>ROOM SESSION TOTALS</span>
         </div>
         <div class="perf-summary-list">
@@ -844,6 +910,7 @@ export class PerfSidebar {
       this.resizeCanvases();
       this.renderScalingChart();
       this.renderLiveChart();
+      this.renderSessionChart();
     });
 
     if (typeof ResizeObserver !== "undefined" && this.container) {
@@ -851,6 +918,7 @@ export class PerfSidebar {
         this.resizeCanvases();
         this.renderScalingChart();
         this.renderLiveChart();
+        this.renderSessionChart();
       });
       ro.observe(this.container);
     }
@@ -878,6 +946,7 @@ export class PerfSidebar {
         this.resizeCanvases();
         this.renderScalingChart();
         this.renderLiveChart();
+        this.renderSessionChart();
       }, 150);
     }
   }
@@ -885,8 +954,10 @@ export class PerfSidebar {
   setupCanvases() {
     this.liveCanvas = document.getElementById("perf-live-canvas");
     this.scalingCanvas = document.getElementById("perf-scaling-canvas");
+    this.sessionCanvas = document.getElementById("perf-session-canvas");
     if (this.liveCanvas) this.liveCtx = this.liveCanvas.getContext("2d");
     if (this.scalingCanvas) this.scalingCtx = this.scalingCanvas.getContext("2d");
+    if (this.sessionCanvas) this.sessionCtx = this.sessionCanvas.getContext("2d");
     this.resizeCanvases();
   }
 
@@ -894,6 +965,7 @@ export class PerfSidebar {
   resizeCanvases() {
     if (this.liveChartInstance) this.liveChartInstance.resize();
     if (this.scalingChartInstance) this.scalingChartInstance.resize();
+    if (this.sessionChartInstance) this.sessionChartInstance.resize();
   }
 
   updateDeviceListUI() {
@@ -1179,7 +1251,7 @@ export class PerfSidebar {
       this.updateScalingLegend();
 
   }
-updateScalingLegend() {
+  updateScalingLegend() {
     if (typeof document === "undefined") return;
     const legend = document.getElementById("perf-scaling-legend");
     if (!legend) return;
@@ -1202,11 +1274,133 @@ updateScalingLegend() {
     }).join("");
 
   }
+
+  renderSessionChart() {
+    if (!this.sessionCanvas) return;
+    const history = this.sessionHistory.filter((item) => Number(item.deviceCount) > 0);
+    const grouped = new Map();
+    history.forEach((item) => {
+      const count = Math.max(1, Math.floor(Number(item.deviceCount) || 1));
+      if (!grouped.has(count)) grouped.set(count, []);
+      grouped.get(count).push(item);
+    });
+
+    const metrics = [
+      { label: "Avg tok/s", value: (items) => items.reduce((sum, item) => sum + (Number(item.tokensPerSecond) || 0), 0) / items.length },
+      { label: "Peak tok/s", value: (items) => items.reduce((sum, item) => sum + (Number(item.peakTokensPerSecond) || 0), 0) / items.length },
+      { label: "Avg tokens", value: (items) => items.reduce((sum, item) => sum + (Number(item.tokens) || 0), 0) / items.length },
+      { label: "Chats", value: (items) => items.length },
+    ];
+    const summaries = [...grouped.entries()].sort(([a], [b]) => a - b).map(([count, items]) => ({
+      count,
+      items,
+      values: metrics.map((metric) => metric.value(items)),
+    }));
+    const maxima = metrics.map((_, index) => Math.max(0.001, ...summaries.map((summary) => summary.values[index])));
+
+    if (!this.sessionChartInstance) {
+      this.sessionChartInstance = new Chart(this.sessionCanvas, {
+        type: "radar",
+        data: { labels: metrics.map((metric) => metric.label), datasets: [] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: { duration: 180 },
+          scales: {
+            r: {
+              beginAtZero: true,
+              min: 0,
+              max: 100,
+              ticks: { display: false, stepSize: 25 },
+              grid: { color: "rgba(139, 135, 122, 0.24)" },
+              angleLines: { color: "rgba(139, 135, 122, 0.2)" },
+              pointLabels: { color: "#8b877a", font: { size: 9 } },
+            },
+          },
+          plugins: {
+            legend: { display: true, position: "bottom", labels: { color: "#8b877a", boxWidth: 9, padding: 8, font: { size: 9 } } },
+            tooltip: {
+              callbacks: {
+                label: (context) => {
+                  const value = context.dataset.metricValues?.[context.dataIndex];
+                  return `${context.dataset.label}: ${Number(value || 0).toFixed(1)} ${metrics[context.dataIndex].label}`;
+                },
+              },
+            },
+          },
+        },
+      });
+    }
+
+    const datasets = summaries.map((summary) => {
+      const color = DEVICE_COLORS[(summary.count - 1) % DEVICE_COLORS.length];
+      return {
+        label: `${summary.count} ${summary.count === 1 ? "device" : "devices"}`,
+        data: summary.values.map((value, index) => (value / maxima[index]) * 100),
+        metricValues: summary.values,
+        borderColor: color,
+        backgroundColor: `${color}22`,
+        pointBackgroundColor: color,
+        pointBorderColor: color,
+        pointRadius: 2.5,
+        borderWidth: 2,
+      };
+    });
+    this.sessionChartInstance.data.labels = metrics.map((metric) => metric.label);
+    this.sessionChartInstance.data.datasets = datasets;
+    this.sessionChartInstance.update();
+
+    const empty = document.getElementById("perf-session-empty");
+    if (empty) empty.style.display = history.length ? "none" : "flex";
+    const sessionTokens = document.getElementById("perf-sess-tokens");
+    if (sessionTokens) sessionTokens.innerText = `${this.sessionTokens.toLocaleString()} tok`;
+    const sessionSpeed = document.getElementById("perf-sess-avg-tps");
+    if (sessionSpeed) sessionSpeed.innerText = this.totalGenerationTime > 0
+      ? `${(this.sessionTokens / this.totalGenerationTime).toFixed(1)} tok/s`
+      : "— tok/s";
+    const list = document.getElementById("perf-session-history");
+    if (list) {
+      const recent = [...history].slice(-5).reverse();
+      list.innerHTML = recent.length ? recent.map((item) => {
+        const count = Math.max(1, Math.floor(Number(item.deviceCount) || 1));
+        const color = DEVICE_COLORS[(count - 1) % DEVICE_COLORS.length];
+        const time = new Date(item.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        return `<div class="perf-history-row">
+          <div class="perf-history-main"><i class="perf-history-dot" style="background:${color}"></i><b>${count} ${count === 1 ? "device" : "devices"}</b><span>· ${Number(item.tokens) || 0} tokens</span></div>
+          <span>${time}</span>
+          <div class="perf-history-sub"><span>${(Number(item.tokensPerSecond) || 0).toFixed(1)} tok/s</span><span>·</span><span>${(Number(item.tokensPerMinute) || 0).toFixed(0)} tok/min</span><span>·</span><span>${escapeHtml(item.model || "Model")}</span></div>
+        </div>`;
+      }).join("") : '<div class="perf-history-empty">Completed chats will appear here with speed and device count.</div>';
+    }
+  }
+
+  saveSessionRecord(opts = {}) {
+    const totalTokens = Math.max(0, Number(opts.totalTokens ?? this.tokenCount) || 0);
+    const totalSecs = Math.max(0, Number(opts.totalSecs ?? ((performance.now() - this.genStartTime) / 1000)) || 0);
+    const failed = String(opts.stats || "").toLowerCase().startsWith("failed:");
+    if (failed) return;
+    const tokensPerSecond = totalSecs > 0 ? totalTokens / totalSecs : 0;
+    this.sessionHistory.push({
+      timestamp: new Date().toISOString(),
+      model: this.currentModel,
+      deviceCount: this.currentDeviceCount || this.clusterSize || 1,
+      tokens: totalTokens,
+      seconds: totalSecs,
+      tokensPerSecond,
+      tokensPerMinute: tokensPerSecond * 60,
+      peakTokensPerSecond: this.peakTps,
+    });
+    this.sessionHistory = this.sessionHistory.slice(-60);
+    try { sessionStorage.setItem(this.sessionStorageKey, JSON.stringify(this.sessionHistory)); } catch {}
+    this.renderSessionChart();
+  }
+
   onGenStart(opts) {
     try {
       this.isStreaming = true;
       this.currentModel = opts.model || '';
       this.backend = opts.backend || 'local';
+      this.currentDeviceCount = Math.max(1, Number(opts.deviceCount) || this.clusterSize || this.devices.length || 1);
       this.genStartTime = performance.now();
       this.firstTokenTime = null;
       this.tokenCount = 0;
@@ -1327,6 +1521,7 @@ updateScalingLegend() {
   onGenDone(opts) {
     try {
       this.isStreaming = false;
+      this.saveSessionRecord(opts || {});
       if (typeof document !== 'undefined') {
         const topBtn = document.getElementById('topbar-perf-btn');
         if (topBtn) topBtn.classList.remove('streaming');
