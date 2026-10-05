@@ -1,4 +1,4 @@
-// SwarmLLM Complete Demonstration Launcher
+// WebSlice Complete Demonstration Launcher
 // Starts both the static web server and local PeerServer signaling server,
 // and outputs exact URLs for single-system and multi-device demonstrations.
 // Usage:
@@ -39,7 +39,7 @@ function getLocalIp() {
 const localIp = getLocalIp();
 
 console.log("\n╔══════════════════════════════════════════════════════════════════╗");
-console.log("║               SwarmLLM Unified Demonstration Suite               ║");
+console.log("║               WebSlice Unified Demonstration Suite               ║");
 console.log("║         Decentralized Browser-Native P2P LLM Inference           ║");
 console.log("╚══════════════════════════════════════════════════════════════════╝\n");
 

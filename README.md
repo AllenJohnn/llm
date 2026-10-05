@@ -1,11 +1,11 @@
 <p align="center">
-  <a href="https://swarmllm.ai"><img src="favicon.svg" width="72" alt="SwarmLLM"></a>
+  <a href="https://webslice.ai"><img src="favicon.svg" width="72" alt="WebSlice"></a>
 </p>
-<h1 align="center">SwarmLLM</h1>
+<h1 align="center">WebSlice</h1>
 <p align="center"><b>Every device brings a slice. Together they run the whole model.</b></p>
 <p align="center">
-  <a href="https://swarmllm.ai">Site</a> ·
-  <a href="https://swarmllm.ai/room">Start a swarm</a> ·
+  <a href="https://webslice.ai">Site</a> ·
+  <a href="https://webslice.ai/room">Start a swarm</a> ·
   <a href="docs/architecture.md">Architecture</a> ·
   <a href="docs/bench-log.md">Benchmarks</a> ·
   <a href="roadmap/">Roadmap</a> ·
@@ -19,9 +19,9 @@
 
 https://github.com/user-attachments/assets/4f349e4b-c699-45da-abe8-e9162689293e
 
-<p align="center"><sub>Demo, recorded September 7, 2026: Qwen 3.8 27B across a MacBook and an iPhone in browser tabs, same Wi‑Fi, 400 tokens at 10.7 tok/s. <a href="https://github.com/Nehanth/swarmllm/releases/download/v0.2.0/swarmllm-demo-2026-09-07.mp4">Download</a>.</sub></p>
+<p align="center"><sub>Demo, recorded September 7, 2026: Qwen 3.8 27B across a MacBook and an iPhone in browser tabs, same Wi‑Fi, 400 tokens at 10.7 tok/s. <a href="https://github.com/Nehanth/webslice/releases/download/v0.2.0/webslice-demo-2026-09-07.mp4">Download</a>.</sub></p>
 
-SwarmLLM runs large language models across the devices in a room, in their browser tabs. Each device holds a slice of the model; a 10 KB activation vector passes between them over direct WebRTC connections. Nothing to install, no accounts, no server does any thinking.
+WebSlice runs large language models across the devices in a room, in their browser tabs. Each device holds a slice of the model; a 10 KB activation vector passes between them over direct WebRTC connections. Nothing to install, no accounts, no server does any thinking.
 
 - **27B in browser tabs.** Qwen 3.8 27B (15 GB of Q4_0 weights) across laptops, phones and PCs that individually can't hold it.
 - **Native-competitive decode.** A from-scratch WebGPU engine (~50 WGSL kernels) at the memory roofline: 9.0 tok/s plain and 16 tok/s with speculative decoding on a GB10, where native llama.cpp measures 8.0 on the same file and GPU. ([bench log](docs/bench-log.md))
@@ -31,7 +31,7 @@ SwarmLLM runs large language models across the devices in a room, in their brows
 
 ## Quick start
 
-**Use it:** open [swarmllm.ai/room](https://swarmllm.ai/room), create a room, share the code, pick a model, start. Every device downloads only its layers (cached for next time).
+**Use it:** open [webslice.ai/room](https://webslice.ai/room), create a room, share the code, pick a model, start. Every device downloads only its layers (cached for next time).
 
 **Run it locally:**
 
@@ -69,7 +69,7 @@ Other projects split or share models across machines. The differences are what h
 
 | | Model per device | Devices | Install | Network |
 |---|---|---|---|---|
-| **SwarmLLM** | a slice of layers | laptops and phones, any OS with a WebGPU browser | none, open a URL | same Wi‑Fi or across the internet (WebRTC) |
+| **WebSlice** | a slice of layers | laptops and phones, any OS with a WebGPU browser | none, open a URL | same Wi‑Fi or across the internet (WebRTC) |
 | exo | a slice of layers | machines that run Python and MLX or tinygrad | Python package per node | one network |
 | llama.cpp `rpc-server` | a slice of layers | machines that run the binary | binary and an open port per node; the docs say not for untrusted networks | LAN in practice |
 | Petals | a slice of layers | server GPUs in a public swarm | Python client and server | internet, public swarm |
@@ -126,9 +126,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [GOVERNANCE.md](GOVERNANCE.md). Bench
 ## Citation
 
 ```bibtex
-@software{swarmllm2026,
+@software{webslice2026,
   author = {John, Allen},
-  title  = {SwarmLLM: peer-to-peer LLM inference across browser tabs},
+  title  = {WebSlice: peer-to-peer LLM inference across browser tabs},
   year   = {2026},
   url    = {https://github.com/AllenJohnn/llm}
 }

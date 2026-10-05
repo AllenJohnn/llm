@@ -3,7 +3,7 @@
 **Phase:** next · **Status:** planned
 
 ## Why
-SwarmLLM only ever needed a network, not the internet. Classrooms, ships, clinics, and internet shutdowns all have local Wi-Fi (a phone hotspot, a router, mesh routers) but no upstream. Three things currently assume the internet: loading the page, the signaling broker, and downloading weights.
+WebSlice only ever needed a network, not the internet. Classrooms, ships, clinics, and internet shutdowns all have local Wi-Fi (a phone hotspot, a router, mesh routers) but no upstream. Three things currently assume the internet: loading the page, the signaling broker, and downloading weights.
 
 ## Design
 - **Offline-loadable app:** a PWA with a service worker caching the whole app, and a single-file build that can be passed around.

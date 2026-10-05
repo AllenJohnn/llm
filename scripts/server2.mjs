@@ -1,4 +1,4 @@
-// Zero-dependency local web & API server for SwarmLLM
+// Zero-dependency local web & API server for WebSlice
 // Serves static files, rewrites /room -> /p2p.html, and handles /api/groq proxy endpoint.
 import http from "node:http";
 import fs from "node:fs";
@@ -171,6 +171,6 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`[SwarmLLM Server] Listening on http://localhost:${PORT}/ (and http://0.0.0.0:${PORT}/)`);
-  console.log(`[SwarmLLM Server] Groq proxy active at http://localhost:${PORT}/api/groq`);
+  console.log(`[WebSlice Server] Listening on http://localhost:${PORT}/ (and http://0.0.0.0:${PORT}/)`);
+  console.log(`[WebSlice Server] Groq proxy active at http://localhost:${PORT}/api/groq`);
 });

@@ -2,7 +2,7 @@
   "name": "webslice",
   "version": "0.2.0",
   "description": "WebGPU-accelerated Sharded LLM Inference across Compute-constrained Edge devices.",
-  "homepage": "https://swarmllm.ai",
+  "homepage": "https://webslice.ai",
   "repository": {
     "type": "git",
     "url": "https://github.com/AllenJohnn/llm.git"

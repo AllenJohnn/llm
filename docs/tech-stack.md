@@ -1,6 +1,6 @@
 # Tech stack
 
-What SwarmLLM is built from, and why each piece was chosen. There is no build step and no framework: the site is three HTML/JS entry points plus ES modules.
+What WebSlice is built from, and why each piece was chosen. There is no build step and no framework: the site is three HTML/JS entry points plus ES modules.
 
 | Layer | Technology | Why |
 |---|---|---|

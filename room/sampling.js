@@ -3,7 +3,7 @@
 export function aiSample(logits, temp = 0.8, topk = 40, recentTokens = [], repPenalty = 1.15) {
   // Apply repetition penalty to recent tokens
   if (repPenalty !== 1.0 && recentTokens && recentTokens.length > 0) {
-    const window = recentTokens.slice(-64);
+    const window = recentTokens.slice(-256);
     const seen = new Set(window);
     for (const id of seen) {
       if (id >= 0 && id < logits.length) {

@@ -1,12 +1,12 @@
 # Releases
 
-SwarmLLM deploys through Vercel's git integration. Git tags mark milestones people can cite.
+WebSlice deploys through Vercel's git integration. Git tags mark milestones people can cite.
 
 | Push to | Deploys to |
 |---|---|
 | any branch | Preview deployment on Vercel |
-| `faster-kernels` | also `https://swarmllm-dev.vercel.app` (the staging name) |
-| `main` | production, [swarmllm.ai](https://swarmllm.ai) |
+| `faster-kernels` | also `https://webslice-dev.vercel.app` (the staging name) |
+| `main` | production, [webslice.ai](https://webslice.ai) |
 
 So every merge to `main` is a production release: validate on the branch preview first, and merge with a pull request.
 

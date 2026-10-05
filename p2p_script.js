@@ -6,7 +6,7 @@
         s.style.color = isErr ? 'var(--err, #d1242f)' : 'var(--warn, #b58500)';
         s.innerHTML = msg;
       }
-      console.warn('[SwarmLLM Loader]', msg);
+      console.warn('[WebSlice Loader]', msg);
     };
 
     const roomUrl = '/room.js?v=' + Date.now();
@@ -85,7 +85,7 @@
       if (s && (s.textContent.includes('Loading') || s.textContent.includes('HTTP'))) {
         s.textContent = '';
       }
-      console.log('SwarmLLM room module loaded and initialized successfully');
+      console.log('WebSlice room module loaded and initialized successfully');
     } catch (e) {
       notify(`<b>Error in room.js:</b> ${e.message || e}`);
     }

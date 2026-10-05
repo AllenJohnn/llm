@@ -4,7 +4,7 @@ labels: ["bug", "room"]
 body:
   - type: input
     id: url
-    attributes: { label: Site, placeholder: "swarmllm.ai or swarmllm-dev.vercel.app (staging)" }
+    attributes: { label: Site, placeholder: "webslice.ai or webslice-dev.vercel.app (staging)" }
     validations: { required: true }
   - type: textarea
     id: devices

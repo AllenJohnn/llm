@@ -1,6 +1,6 @@
 # Models
 
-SwarmLLM ships no weights. Browsers fetch tensors by HTTP range request from public Hugging Face repositories; local development and tests read the same files from `models/` (git-ignored).
+WebSlice ships no weights. Browsers fetch tensors by HTTP range request from public Hugging Face repositories; local development and tests read the same files from `models/` (git-ignored).
 
 ## Supported
 

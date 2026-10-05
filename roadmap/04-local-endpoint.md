@@ -1,4 +1,4 @@
-# 04 · `npx swarmllm serve`: an OpenAI-compatible local endpoint
+# 04 · `npx webslice serve`: an OpenAI-compatible local endpoint
 
 **Phase:** next · **Status:** planned
 

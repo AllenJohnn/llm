@@ -1,4 +1,4 @@
-// SwarmLLM room: signaling, WebRTC mesh, layer assignment, weight streaming and the
+// WebSlice room: signaling, WebRTC mesh, layer assignment, weight streaming and the
 // generation loop (prefill, decode, speculative verify). Served with p2p.html at /room.
 import { autotuneCoop, makeTokenizer, DenseEngine, argmax, fetchModelShard, shardTensorNames, gpuSelfTest, kernelMicroTests }
   from "./engine/engine.js";
@@ -56,7 +56,7 @@ function toast(text) {
   setTimeout(() => t.remove(), 4200);
 }
 function mascot() {}
-const PREFIX = "swarmllm-room-";
+const PREFIX = "webslice-room-";
 const rand = (n) => Array.from(crypto.getRandomValues(new Uint8Array(n)))
   .map(b => "ABCDEFGHJKMNPQRSTVWXYZ23456789"[b % 30]).join("");
 
@@ -143,14 +143,23 @@ async function measureBudgetGB(adapter, capGB) {
 const metaPromise = (async () => {
   try {
     const m = await probeGPU();
-    if (m.webgpu && m.budgetGB) m.contribGB = Math.max(0.2, Math.round(m.budgetGB * 0.5 * 10) / 10);
-    else if (!m.webgpu) m.contribGB = 0;
+    if (m.webgpu) {
+      const sysMem = navigator.deviceMemory || 0;
+      let rec = m.budgetGB ? m.budgetGB * 0.5 : 1;
+      if (sysMem >= 64) rec = 48;
+      else if (sysMem >= 32) rec = 24;
+      else if (sysMem >= 16) rec = 12;
+      else if (sysMem >= 8) rec = 6;
+      m.contribGB = Math.max(0.2, Math.round(rec * 10) / 10);
+    } else {
+      m.contribGB = 0;
+    }
     m.phone = m.ua === "iPhone" || m.ua === "Android";
     const gbEl = $("join-gb");
     if (gbEl) {
       if (!m.webgpu) { gbEl.value = "0"; gbEl.disabled = true; }
       else if (m.phone) { m.contribGB = 0.5; gbEl.min = "0.5"; gbEl.step = "0.5"; gbEl.value = "0.5"; }
-      else if (m.contribGB) { m.contribGB = Math.max(1, Math.round(m.contribGB)); gbEl.value = m.contribGB; }
+      else if (m.contribGB) { m.contribGB = Math.max(1, m.contribGB); gbEl.value = m.contribGB; }
     }
     return m;
   } catch (e) {
@@ -442,7 +451,7 @@ function enterRoom() {
   peerCard("self", myName, myMeta, true);
   perfSidebar.init();
   updateCluster();
-  log("swarm", `room ${roomCode} — share this code with your other devices`);
+  log("webslice", `room ${roomCode} — share this code with your other devices`);
   $("ai-panel").style.display = "flex";
   aiStatus("");
   $("ai-empty").textContent = "pick a model and press start, from any device";
@@ -508,15 +517,15 @@ function wire(conn, name, meta, initiator = false) {
           ai.clusterDegraded = true;
           ai.abortGen = true;
           aiStatus(`Cluster degraded \u2014 worker ${e?.name || conn.peer} disconnected. Reload model to recover.`);
-          log("swarm", `Cluster degraded \u2014 missing required worker ${e?.name || conn.peer}`);
+          log("webslice", `Cluster degraded \u2014 missing required worker ${e?.name || conn.peer}`);
         }
         aiMaybeReady();
       }
     }
     if (isHost) {
       dropCard(conn.peer); members.delete(conn.peer); roster.delete(conn.peer); broadcastRoster();
-      log("swarm", `${e?.name || conn.peer} left`);
-    } else if (conn.peer === ai.hostId || (e && e.name === "host")) log("swarm", "lost the link to the host");
+      log("webslice", `${e?.name || conn.peer} left`);
+    } else if (conn.peer === ai.hostId || (e && e.name === "host")) log("webslice", "lost the link to the host");
     updateCluster();
   });
   conn.on("error", () => {});
@@ -529,7 +538,7 @@ function ensureCard(id, name, meta) {
     card = peerCard(id, name || id, meta || {}, false);
     cards.set(id, card);
     updateCluster();
-    log("swarm", `${name || id} joined`);
+    log("webslice", `${name || id} joined`);
     mascot(`${name || id} joined! ${members.size + 1} devices in the room.`);
   }
   const e = conns.get(id);
@@ -563,7 +572,7 @@ function sendTo(id, obj) {
   }
 }
 // debug: per-peer wire state (channels open, frames sent/received) — `swarmDebug()` in the console
-window.swarmDebug = () => [...conns].map(([id, e]) => ({ id, name: e.name, chans: e.link?.chans.filter((c) => c.readyState === "open").length ?? 0, sent: e.link?.sent ?? 0, recv: e.link?.recv ?? 0 }));
+window.websliceDebug = () => [...conns].map(([id, e]) => ({ id, name: e.name, chans: e.link?.chans.filter((c) => c.readyState === "open").length ?? 0, sent: e.link?.sent ?? 0, recv: e.link?.recv ?? 0 }));
 // activations go over the sliced wire channel when it is up, else as a normal message
 function sendHidden(id, msg) {
   const e = conns.get(id);
@@ -640,7 +649,7 @@ function onData(from, d) {
     }
     case "bw-result":
       if (e.card) e.card.querySelector(".bw").textContent = d.mbps + " Mbps";
-      log("swarm", `bandwidth to ${e.name}: ${d.mbps} Mbps`);
+      log("webslice", `bandwidth to ${e.name}: ${d.mbps} Mbps`);
       break;
   }
 }
@@ -665,7 +674,7 @@ function meshConnect(targetId) {
 async function bwTest(id) {
   const e = conns.get(id);
   if (!e) return;
-  log("swarm", `testing bandwidth to ${e.name}…`);
+  log("webslice", `testing bandwidth to ${e.name}…`);
   sendTo(id, { t: "bw-start" });
   const chunk = new Uint8Array(64 * 1024);
   const total = 4 * 1024 * 1024;
@@ -805,7 +814,7 @@ async function start(create) {
         $("join-status").textContent = "connected!";
         wire(conn, "host", undefined, true);
         let died = null;
-        try { const c = JSON.parse(localStorage.getItem("swarm-crumb") || "null"); if (c && Date.now() - c.t < 10 * 60 * 1000) died = { during: c.s, ago: Math.round((Date.now() - c.t) / 1000) }; } catch {}
+        try { const c = JSON.parse(localStorage.getItem("webslice-crumb") || "null"); if (c && Date.now() - c.t < 10 * 60 * 1000) died = { during: c.s, ago: Math.round((Date.now() - c.t) / 1000) }; } catch {}
         conn.send({ t: "hello", name: myName, meta: myMeta, died });
         enterRoom();
       };
@@ -903,10 +912,16 @@ $("room-badge").addEventListener("click", copyRoomLink);
 let weightCache = null, cacheHits = 0;
 async function getWeightCache() {
   if (weightCache !== null) return weightCache;
-  try { weightCache = await caches.open("swarmllm-weights-v1"); } catch { weightCache = false; }
+  try { weightCache = await caches.open("webslice-weights-v1"); } catch { weightCache = false; }
   return weightCache;
 }
-function cacheKey(url, lo, hi) { return "https://weights.swarmllm.ai/" + encodeURIComponent(url) + "/" + lo + "-" + hi; }
+function cacheKey(url, lo, hi) { return "https://weights.webslice.ai/" + encodeURIComponent(url) + "/" + lo + "-" + hi; }
+function readWithIdleTimeout(reader, timeoutMs = 60_000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`download paused for ${Math.round(timeoutMs / 1000)} seconds`)), timeoutMs);
+    reader.read().then((value) => { clearTimeout(timer); resolve(value); }, (err) => { clearTimeout(timer); reject(err); });
+  });
+}
 async function rangeFetch(url, lo, hi, noCache = false) {
   const expectedLen = hi - lo + 1;
   const c = await getWeightCache();
@@ -916,7 +931,7 @@ async function rangeFetch(url, lo, hi, noCache = false) {
       const hit = await c.match(key);
       if (hit) {
         // only trust a complete entry: a tab that died mid-write leaves a short one behind
-        const cl = hit.headers.get("x-swarm-len") || hit.headers.get("content-length");
+        const cl = hit.headers.get("x-webslice-len") || hit.headers.get("content-length");
         if (cl === String(expectedLen)) { cacheHits += expectedLen; return hit; }
         c.delete(key).catch(() => {});
       }
@@ -925,8 +940,11 @@ async function rangeFetch(url, lo, hi, noCache = false) {
   const headers = { Range: `bytes=${lo}-${hi}` };
   if (url.includes("ngrok")) headers["ngrok-skip-browser-warning"] = "1";
   const model = MODELS[ai.model];
-  let currentUrl = url.startsWith("https://hf-mirror.com/") && model?.ggufFallback && model.gguf === model.ggufFallback
-    ? model.ggufFallback : url;
+  const modelSources = model?.kind === "st"
+    ? [model.originalSt, model.st, model.stFallback]
+    : [model?.originalGguf, model?.gguf, model?.ggufFallback];
+  const urls = [...new Set([url, ...modelSources].filter(Boolean))];
+  let currentUrl = urls[0] || url;
 
   const maxRetries = 3;
   let lastErr = null;
@@ -936,44 +954,18 @@ async function rangeFetch(url, lo, hi, noCache = false) {
       await new Promise((r) => setTimeout(r, delay));
     }
     try {
+      currentUrl = urls[Math.min(attempt, urls.length - 1)] || url;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(new Error("model server did not respond")), 45_000);
       let r;
-      try {
-        r = await fetch(currentUrl, { headers });
-      } catch (err) {
-        const isLocal = currentUrl.startsWith("/") || currentUrl.includes("://127.0.0.1") || currentUrl.includes("://localhost");
-        if (isLocal && (model?.originalGguf || model?.ggufFallback)) {
-          console.warn(`[SwarmLLM] Local fetch failed for ${currentUrl}, falling back to remote URL`);
-          currentUrl = model.originalGguf || model.ggufFallback;
-          if (model.gguf) model.gguf = currentUrl;
-          r = await fetch(currentUrl, { headers });
-        } else if (currentUrl.startsWith("https://hf-mirror.com/") && model?.ggufFallback) {
-          currentUrl = model.ggufFallback;
-          if (model.gguf) model.gguf = currentUrl;
-          r = await fetch(currentUrl, { headers });
-        } else {
-          throw err;
-        }
-      }
-
-      if (r.status !== 206 && r.status !== 200) {
-        const isLocal = currentUrl.startsWith("/") || currentUrl.includes("://127.0.0.1") || currentUrl.includes("://localhost");
-        if (isLocal && (model?.originalGguf || model?.ggufFallback)) {
-          console.warn(`[SwarmLLM] Local URL returned HTTP ${r.status}, falling back to remote URL`);
-          currentUrl = model.originalGguf || model.ggufFallback;
-          if (model.gguf) model.gguf = currentUrl;
-          r = await fetch(currentUrl, { headers });
-        } else if (currentUrl.startsWith("https://hf-mirror.com/") && model?.ggufFallback) {
-          currentUrl = model.ggufFallback;
-          if (model.gguf) model.gguf = currentUrl;
-          r = await fetch(currentUrl, { headers });
-        }
-      }
+      try { r = await fetch(currentUrl, { headers, signal: controller.signal }); }
+      finally { clearTimeout(timeout); }
 
       if (r.status !== 206 && r.status !== 200) {
         throw new Error("model host refused range requests (HTTP " + r.status + ")");
       }
       // If server returned HTTP 200 for a partial range, it ignored the Range header UNLESS it's a slice of exact expectedLength
-      const cl = r.headers.get("content-length") || r.headers.get("x-swarm-len");
+      const cl = r.headers.get("content-length") || r.headers.get("x-webslice-len");
       if (r.status === 200 && lo > 0) {
         if (cl && parseInt(cl, 10) !== expectedLen) {
           throw new Error("server ignored Range header and returned full response (HTTP 200)");
@@ -997,7 +989,7 @@ async function rangeFetch(url, lo, hi, noCache = false) {
               headers: {
                 "content-type": "application/octet-stream",
                 "content-length": String(buf.byteLength),
-                "x-swarm-len": String(buf.byteLength),
+                "x-webslice-len": String(buf.byteLength),
                 "content-range": `bytes ${lo}-${hi}/*`
               }
             }));
@@ -1007,18 +999,16 @@ async function rangeFetch(url, lo, hi, noCache = false) {
       return r;
     } catch (err) {
       lastErr = err;
+      currentUrl = urls[Math.min(attempt + 1, urls.length - 1)] || url;
       if (attempt < maxRetries) {
-        console.warn(`[SwarmLLM] rangeFetch attempt ${attempt + 1} failed for ${currentUrl} [${lo}-${hi}]: ${err.message}. Retrying...`);
+        console.warn(`[WebSlice] rangeFetch attempt ${attempt + 1} failed for ${currentUrl} [${lo}-${hi}]: ${err.message}. Retrying...`);
       }
     }
   }
   throw new Error(`rangeFetch failed for ${currentUrl} [${lo}-${hi}] after ${maxRetries + 1} attempts: ${lastErr?.message || lastErr}`);
 }
 async function fetchGGUFHeader(url, needTokenizer = true) {
-  if (fallbackmode || (url && url.includes("Qwen3.8-27B"))) {
-    console.warn("[FallbackMode] Bypassing fetchGGUFHeader for 27B model (using Cloud API API directly)");
-    return { meta: { "qwen35.block_count": 64, "qwen35.nextn_predict_layers": 0 }, tensors: {} };
-  }
+  if (fallbackmode) throw new Error("Local model loading is disabled while fallback mode is active.");
   let size = 12 * 2 ** 20;
   for (;;) {
     const r = await rangeFetch(url, 0, size - 1);   // 206 from the network, 200 from the cache
@@ -1066,7 +1056,7 @@ const rangeBytesOf = (url) => async (info, onProgress = () => {}) => {
       reader = r.body.getReader();
       let offset = 0;
       for (;;) {
-        const { value, done } = await reader.read();
+        const { value, done } = await readWithIdleTimeout(reader);
         if (done) break;
         if (offset + value.byteLength > bytes.length) throw new Error(`oversized download for ${info.name}`);
         bytes.set(value, offset);
@@ -1082,7 +1072,7 @@ const rangeBytesOf = (url) => async (info, onProgress = () => {}) => {
       try { await reader?.cancel(err); } catch {}
       if (attemptReported > 0) onProgress(-attemptReported);
       if (attempt < maxRetries) {
-        console.warn(`[SwarmLLM] Range download attempt ${attempt + 1} failed for ${info.name}: ${err.message}. Retrying...`);
+        console.warn(`[WebSlice] Range download attempt ${attempt + 1} failed for ${info.name}: ${err.message}. Retrying...`);
       }
     }
   }
@@ -1095,7 +1085,7 @@ export { formatLayerRange };
 
 function aiStatus(s) { $("ai-status").textContent = s; crumb(s); }
 // breadcrumb: if iOS kills the tab, the reloaded page can say where it died
-function crumb(s) { try { localStorage.setItem("swarm-crumb", JSON.stringify({ s, t: Date.now(), mem: performance.memory?.usedJSHeapSize })); } catch {} }
+function crumb(s) { try { localStorage.setItem("webslice-crumb", JSON.stringify({ s, t: Date.now(), mem: performance.memory?.usedJSHeapSize })); } catch {} }
 // (crumb is kept in localStorage for debugging, not shown on the join screen)
 function aiLoading(show, title) {
   $("ai-loading").style.display = show ? "block" : "none";
@@ -1114,7 +1104,10 @@ function loadCardRender() {
     const pct = Math.max(0, Math.min(100, (ai.prog || {})[nm] ?? 0));
     const l = layersOf(nm);
     const layerDesc = l ? (l.startsWith("layer") || l.startsWith("embed") || l.includes("only") ? l : `layers ${l}`) : "";
-    return `<div class="lc-row${pct >= 100 ? " done" : ""}"><div class="n">${nm}${layerDesc ? `<small>${layerDesc}</small>` : ""}</div><div class="bar"><div class="fill" style="width:${pct}%"></div></div><div class="pct">${pct >= 100 ? "ready" : pct + "%"}</div></div>`;
+    const stage = (ai.stageByName || {})[nm];
+    const detail = [layerDesc, stage].filter(Boolean).join(" · ");
+    const ready = pct >= 100 && stage === "ready";
+    return `<div class="lc-row${ready ? " done" : ""}"><div class="n">${esc(nm)}${detail ? `<small>${esc(detail)}</small>` : ""}</div><div class="bar"><div class="fill" style="width:${pct}%"></div></div><div class="pct">${ready ? "ready" : pct + "%"}</div></div>`;
   }).join("");
   updateTopbarPeers();
   if (ai.isDownloading) {
@@ -1128,6 +1121,13 @@ function aiProgress(done, total, note) {
   $("ldg-fill").style.width = pct + "%";
   $("ldg-sub").textContent = `${(done / 2 ** 20).toFixed(0)} MB of ${(total / 2 ** 20).toFixed(0)} MB · ${pct}%` + (note ? " · " + note : "");
   updateTopbarDownload(true, done, total, note);
+}
+function aiLoadStage(stage) {
+  ai.stageByName = ai.stageByName || {};
+  ai.stageByName[myName] = stage;
+  if (ai.role === "worker" && ai.hostId) sendTo(ai.hostId, { t: "ai-stage", stage });
+  loadCardRender();
+  aiStatus(stage);
 }
 function formatTime() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -1180,7 +1180,7 @@ function renderWelcomePrompts() {
         <span class="welcome-dot"></span>
         <span>CLUSTER READY · ${n} DEVICE${n > 1 ? "S" : ""} ONLINE</span>
       </div>
-      <h2 class="welcome-title">Welcome to <span>swarmLLM</span></h2>
+      <h2 class="welcome-title">Welcome to <span>WebSlice</span></h2>
       <p class="welcome-desc">Distributed WebGPU cluster running <strong>${esc(modelLabel)}</strong>. Every token is computed across all GPUs in the room.</p>
       <div class="prompts-grid">
         <button class="prompt-card" type="button" onclick="window.usePromptSuggestion('Write a playable single-file Flappy Bird game in HTML and Canvas with smooth physics.')">
@@ -1323,14 +1323,14 @@ function chatBotStart() {
   const time = formatTime();
   m.innerHTML = `
     <div class="msg-header">
-      <div class="bot-avatar" title="SwarmLLM Mesh">
+      <div class="bot-avatar" title="WebSlice Mesh">
         <svg class="bot-mesh-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
           <polyline points="2 17 12 22 22 17"></polyline>
           <polyline points="2 12 12 17 22 12"></polyline>
         </svg>
       </div>
-      <span class="who">swarmLLM</span>
+      <span class="who">WebSlice</span>
       <span class="model-badge">${esc(modelLabel)}</span>
       <span class="msg-time">${time}</span>
     </div>
@@ -1421,8 +1421,7 @@ function chatBotEnd(raw, stats, capped = false) {
 async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
   const isFallback = Boolean(
     fallbackmode ||
-    (typeof window !== "undefined" && window.fallbackmode) ||
-    modelKey === "qwen3.8-27b"
+    (typeof window !== "undefined" && window.fallbackmode)
   );
   if (isFallback) {
     console.warn(`[FallbackMode] Hard intercept: preventing aiLoadShard for ${modelKey}`);
@@ -1433,7 +1432,7 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
   const M = MODELS[modelKey];
   ai.model = modelKey;
   aiLoading(true, `downloading ${formatLayerRange(range, hasEmbed)} of ${M.label.split("\u00b7")[0].trim()}`);
-  aiStatus("requesting GPU\u2026");
+  aiLoadStage("requesting GPU");
   mascot("Grabbing my slice of the model… hang tight.");
   // a previous attempt in this tab still owns its weights: release them first, or the
   // second load doubles GPU memory and every buffer after the limit comes back invalid
@@ -1449,24 +1448,24 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
   });
   ai.device.addEventListener?.("uncapturederror", (ev) => {
     const gmsg = ev.error?.message || "";
-    if (!ai.firstGpuError) { ai.firstGpuError = gmsg; aiStatus("GPU error: " + gmsg.slice(0, 300)); log("swarm", "\u26a0 FIRST GPU error on " + myName + ": " + gmsg.slice(0, 600)); }
+    if (!ai.firstGpuError) { ai.firstGpuError = gmsg; aiStatus("GPU error: " + gmsg.slice(0, 300)); log("webslice", "\u26a0 FIRST GPU error on " + myName + ": " + gmsg.slice(0, 600)); }
     crumb("GPU validation error: " + gmsg.slice(0, 400));
     if (ai.hostId && ai.role !== "host") sendTo(ai.hostId, { t: "ai-error", message: "GPU error: " + (ev.error?.message || "").slice(0, 300) });
-    log("swarm", "\u26a0 GPU error on " + myName + ": " + (ev.error?.message || "").slice(0, 140));
+    log("webslice", "\u26a0 GPU error on " + myName + ": " + (ev.error?.message || "").slice(0, 140));
   });
-  if (location.hash === "#debug") log("swarm", `${myName}: maxBuf ${(adapter.limits.maxBufferSize / 2 ** 30).toFixed(1)} GB \u00b7 maxBind ${(adapter.limits.maxStorageBufferBindingSize / 2 ** 20).toFixed(0)} MB`);
-  aiStatus("testing GPU kernels on this device\u2026");
+  if (location.hash === "#debug") log("webslice", `${myName}: maxBuf ${(adapter.limits.maxBufferSize / 2 ** 30).toFixed(1)} GB \u00b7 maxBind ${(adapter.limits.maxStorageBufferBindingSize / 2 ** 20).toFixed(0)} MB`);
+  aiLoadStage("checking GPU");
   const tAdapter = await navigator.gpu.requestAdapter();   // an adapter gives out one device only
   const tdev = await tAdapter.requestDevice();               // throwaway: its test buffers die with it
   const st = await gpuSelfTest(tdev);
-  if (!st.ok) log("swarm", `${myName} GPU self-test: ${st.detail}`);
+  if (!st.ok) log("webslice", `${myName} GPU self-test: ${st.detail}`);
   if (!st.ok) throw new Error("GPU self-test FAILED on this device: " + st.detail + " \u2014 please screenshot this");
   const mt = await kernelMicroTests(tdev);
-  if (!mt.ok) log("swarm", `${myName} kernels: ${mt.detail}`);
+  if (!mt.ok) log("webslice", `${myName} kernels: ${mt.detail}`);
   if (!mt.ok) throw new Error("GPU kernel FAILED on this device \u2192 " + mt.firstFail + " \u2014 please send me this line");
   try { tdev.destroy(); } catch {}
   ai.device.lost.then((l) => crumb("GPU device lost: " + l.reason + " " + l.message));
-  aiStatus("tuning kernels for this GPU\u2026");
+  aiLoadStage("tuning GPU kernels");
   ai.tune = await autotuneCoop(ai.device).catch(() => ({ wg: 256, rows: 4 }));
   crumb(`autotune: WG=${ai.tune.wg} ROWS=${ai.tune.rows}`);
   const isPhone = myMeta?.phone;
@@ -1475,6 +1474,7 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
   const streamOpts = { pace: isPhone ? 300 : 0, staging: isPhone ? 2 * 2 ** 20 : 8 * 2 ** 20 };
   if (M.kind === "gguf") {
     try {
+      aiLoadStage("reading model header");
       const G = ai.G && ai.GModel === modelKey ? ai.G : await fetchGGUFHeader(M.gguf, M.arch === "phi3");
       ai.G = G; ai.GModel = modelKey;
       ai.cfg = { ...cfgFromGGUF(G), ...(ai.cfg || {}) };
@@ -1493,6 +1493,7 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
     ai.cfg.rope_dim = Math.floor(ai.cfg.head_dim * (ai.cfg.partial_rotary_factor || 0.75));
   }
   if (hasEmbed || hasHead) {
+    aiLoadStage("preparing tokenizer");
     let loadedFromGGUF = false;
     if (M.gguf) {
       try {
@@ -1526,7 +1527,11 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
     if (done < total && done - lastProgressDone < 4 * 2 ** 20 && now - lastProgressAt < 400) return;
     lastProgressDone = done; lastProgressAt = now;
     aiProgress(done, total);
-    aiStatus(cacheHits > done * 0.5 ? `loading weights from this device's cache\u2026` : `downloading weights\u2026`);
+    const stage = cacheHits > done * 0.5 ? "loading cached weights" : "downloading model weights";
+    ai.stageByName = ai.stageByName || {};
+    ai.stageByName[myName] = stage;
+    if (ai.role === "worker") sendTo(ai.hostId, { t: "ai-stage", stage });
+    aiStatus(stage);
     ai.myPct = total ? done / total * 100 : 0;
     ai.prog = ai.prog || {}; ai.progAt = ai.progAt || {};
     ai.prog[myName] = Math.round(ai.myPct); ai.progAt[myName] = Date.now();
@@ -1541,7 +1546,7 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
   pacerHook = null;
 
   if (M.kind === "qwen35") {
-    aiStatus("reading model index\u2026");
+    aiLoadStage("reading model index");
     const needTok = hasEmbed || hasHead;
     const cachedOk = ai.G && ai.GModel === modelKey && (!needTok || ai.G.meta["tokenizer.ggml.tokens"]);
     const G = cachedOk ? ai.G : await fetchGGUFHeader(M.gguf, needTok);
@@ -1555,7 +1560,7 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
     G.streamEntry = streamWithRetry(M.gguf, streamOpts);
     const weights = await qwen35Weights(G, rangeBytesOf(M.gguf), opts, (done) => onProg(done, total),
       (e, name) => gpuUploadEntry(ai.device, e, name === GGML_EMBED));   // straight to the GPU, RAM stays flat
-    aiStatus("building GPU pipelines (compiling shaders)\u2026");
+    aiLoadStage("building GPU pipelines");
     ai.engine = await Qwen35Engine.create({
       device: ai.device, meta: G.meta, weights, vocab: G.tensors[GGML_EMBED]?.shape?.[0],
       layerRange: range, hasEmbed, hasHead, maxSeq: MAX_SEQ,
@@ -1567,7 +1572,7 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
       batchCols: 16, coopRowsB: 1,
     });
   } else if (M.kind === "gguf") {
-    aiStatus("reading model index\u2026");
+    aiLoadStage("reading model index");
     const G = ai.G && ai.GModel === modelKey ? ai.G : await fetchGGUFHeader(M.gguf, M.arch === "phi3");
     ai.G = G; ai.GModel = modelKey;
     ai.cfg = { ...cfgFromGGUF(G), ...(ai.cfg || {}) };
@@ -1576,7 +1581,7 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
     G.streamEntry = streamWithRetry(M.gguf, streamOpts);
     const weights = await ggufWeights(G, rangeBytesOf(M.gguf), opts, (done) => onProg(done, total),
       (e, name) => gpuUploadEntry(ai.device, e, name === GGML_EMBED));
-    aiStatus("building GPU pipelines\u2026");
+    aiLoadStage("building GPU pipelines");
     ai.engine = await DenseEngine.create({
       coopWG: ai.tune?.wg, coopRows: ai.tune?.rows,
       device: ai.device, cfg: ai.cfg, weights,
@@ -1589,13 +1594,13 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
       tensors = await fetchModelShard(M.st, names, (p, done, total) => onProg(done, total));
     } catch (err) {
       if (M.stFallback) {
-        console.warn(`[SwarmLLM] fetchModelShard failed for ${M.st}, falling back to ${M.stFallback}:`, err);
+        console.warn(`[WebSlice] fetchModelShard failed for ${M.st}, falling back to ${M.stFallback}:`, err);
         tensors = await fetchModelShard(M.stFallback, names, (p, done, total) => onProg(done, total));
       } else {
         throw err;
       }
     }
-    aiStatus("building GPU pipelines\u2026");
+    aiLoadStage("building GPU pipelines");
     ai.engine = await DenseEngine.create({
       coopWG: ai.tune?.wg, coopRows: ai.tune?.rows,
       device: ai.device, cfg: ai.cfg, tensors,
@@ -1605,6 +1610,9 @@ async function aiLoadShard(modelKey, range, hasEmbed, hasHead) {
   ai.range = range;
   ai.model = modelKey;
   ai.myPct = 100;
+  ai.stageByName = ai.stageByName || {};
+  ai.stageByName[myName] = "ready";
+  if (ai.role === "worker" && ai.hostId) sendTo(ai.hostId, { t: "ai-stage", stage: "ready" });
   ai.prog = ai.prog || {};
   ai.prog[myName] = 100;
   ai.progAt = ai.progAt || {};
@@ -1682,6 +1690,7 @@ async function aiStart(modelArg) {
   $("ai-start").disabled = true;
   $("ai-model").disabled = true;
   ai.readyPeers = new Set();
+  ai.stageByName = {};
   if (ai.model !== modelKey || ai.GModel !== modelKey) {
     ai.cfg = null; ai.G = null; ai.GModel = null; ai.tok = null; ai.lastHidden = null;
   }
@@ -1742,7 +1751,7 @@ async function aiStart(modelArg) {
     const peerMetas = ai.chain.map((id) => conns.get(id)?.meta);
     const { assigned, ranges, needGB, haveGB } = allocateLayers(L, layerBytes, embedBytes, myMeta, peerMetas);
     if (needGB > haveGB * 1.15)
-      log("swarm", `\u26a0 this model needs ~${needGB.toFixed(1)} GB but the room pledged ~${haveGB.toFixed(1)} GB \u2014 it may not fit`);
+      log("webslice", `\u26a0 this model needs ~${needGB.toFixed(1)} GB but the room pledged ~${haveGB.toFixed(1)} GB \u2014 it may not fit`);
 
     ai.deferred = [];
     ai.chain.forEach((id, i) => {
@@ -1762,7 +1771,7 @@ async function aiStart(modelArg) {
     updateCluster();
     const splitDesc = [`you ${assigned[0]}+embed`, ...ai.chain.map((id, i) =>
       `${conns.get(id)?.name || id} ${assigned[i + 1]}`)].join(" \u00b7 ");
-    log("swarm", `${M.label} \u2014 layer split by pledge: ${splitDesc}`);
+    log("webslice", `${M.label} \u2014 layer split by pledge: ${splitDesc}`);
     await aiLoadShard(modelKey, ranges[0], true, true);
     aiStatus(n === 1
       ? `solo: all ${L} layers local \u2014 ready`
@@ -1771,7 +1780,10 @@ async function aiStart(modelArg) {
   } catch (err) {
     clearInterval(ai.progTimer);
     aiLoading(false);
+    try { ai.device?.destroy(); } catch {}
+    ai.device = null;
     ai.engine = null;
+    ai.G = null; ai.GModel = null; ai.cfg = null; ai.tok = null;
     $("ai-panel").classList.remove("online");
     aiStatus("failed: " + err.message);
     ai.busy = false;
@@ -1794,7 +1806,7 @@ function aiRejoin(newId, name) {
   const dIdx = ai.deferred?.findIndex((d) => d.id === oldId) ?? -1;
   if (dIdx >= 0) { ai.deferred[dIdx] = { id: newId, msg: fresh }; sendTo(newId, { t: "ai-wait" }); }
   else sendTo(newId, fresh);
-  log("swarm", `${name} came back — reloading its layers`);
+  log("webslice", `${name} came back — reloading its layers`);
   aiStatus(`${name} reconnected, reloading its layers…`);
   $("ai-row").style.display = "flex";
 }
@@ -2077,7 +2089,7 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
     ids = [imStart, ...ai.tok.encode("system\nYou are a helpful assistant."), imEnd, ...ai.tok.encode("\n"), imStart, ...ai.tok.encode("user\n" + text), imEnd, ...ai.tok.encode("\n"), imStart, ...ai.tok.encode("assistant\n")];
   }
   // Fast Mode (default): pre-close the think block so Qwen3 skips the 100+ token monologue and generates the answer immediately!
-  const isThinkingModel = MODELS[ai.model]?.thinking || (ai.model && ai.model.includes("qwen3"));
+  const isThinkingModel = MODELS[ai.model]?.thinking === true;
   const wantThinking = ai.thinkingMode === "deep";
   if (isThinkingModel && !wantThinking) {
     if (V["<think>"] !== undefined && V["</think>"] !== undefined) {
@@ -2407,6 +2419,7 @@ async function aiOnData(from, d) {
       ai.role = "worker";
       ai.next = d.next;
       ai.hostId = d.host;
+      ai.stageByName = {};
       if (d.cfg) ai.cfg = { ...(ai.cfg || {}), ...d.cfg };
       ensureLink(d.next);   // open the link to my chain neighbour while the weights download
       try {
@@ -2448,14 +2461,26 @@ async function aiOnData(from, d) {
       ai.prog = ai.prog || {}; ai.progAt = ai.progAt || {};
       ai.prog[e?.name || from] = d.pct; ai.progAt[e?.name || from] = Date.now(); loadCardRender();
       break;
+    case "ai-stage": {
+      const name = e?.name || from;
+      ai.stageByName = ai.stageByName || {};
+      ai.stageByName[name] = d.stage || "working";
+      loadCardRender();
+      break;
+    }
     case "ai-ready":
       ai.readyPeers.add(from);
       if (d.from) ai.readyPeers.add(d.from);
+      ai.stageByName = ai.stageByName || {};
+      ai.stageByName[e?.name || from] = "ready";
       if (e?.card) e.card.querySelector(".bw").textContent = "ready";
       loadCardRender();
       aiMaybeReady();
       break;
     case "ai-error":
+      ai.stageByName = ai.stageByName || {};
+      ai.stageByName[e?.name || from] = "failed";
+      loadCardRender();
       aiStatus(`peer ${e?.name || from} failed: ${d.message}`);
       if (ai.waiters && ai.waiters.size > 0) {
         for (const [key, waiter] of ai.waiters) {
@@ -2622,7 +2647,7 @@ async function aiOnData(from, d) {
       if (ai.busy === "gen") { sendTo(from, { t: "ai-busy" }); break; }
       aiGenerate(d.text, d.name, from);
       break;
-    case "ai-busy": toast("the swarm is still answering, try again in a moment"); break;
+    case "ai-busy": toast("the WebSlice is still answering, try again in a moment"); break;
   }
 }
 
@@ -2634,7 +2659,7 @@ $("ai-visibility").addEventListener("change", (e) => {
 });
 $("cache-clear").addEventListener("click", async (ev) => {
   ev.preventDefault();
-  try { await caches.delete("swarmllm-weights-v1"); weightCache = null; toast("cached weights cleared"); } catch { toast("could not clear the cache"); }
+  try { await caches.delete("webslice-weights-v1"); weightCache = null; toast("cached weights cleared"); } catch { toast("could not clear the cache"); }
 });
 function aiSubmit() {
   if (ai.busy === "gen") {
@@ -2687,13 +2712,13 @@ function updateThinkModeUI(mode) {
 }
 
 function setupThinkingModeToggle() {
-  ai.thinkingMode = localStorage.getItem("swarm_think_mode") || "fast";
+  ai.thinkingMode = localStorage.getItem("webslice_think_mode") || "fast";
   updateThinkModeUI(ai.thinkingMode);
   const fastBtn = $("mode-fast"), deepBtn = $("mode-deep");
   if (fastBtn) {
     fastBtn.addEventListener("click", () => {
       ai.thinkingMode = "fast";
-      localStorage.setItem("swarm_think_mode", "fast");
+      localStorage.setItem("webslice_think_mode", "fast");
       updateThinkModeUI("fast");
       toast("⚡ Fast Mode: instant answers without reasoning delay");
       broadcastAll({ t: "ai-think-mode", mode: "fast" });
@@ -2702,7 +2727,7 @@ function setupThinkingModeToggle() {
   if (deepBtn) {
     deepBtn.addEventListener("click", () => {
       ai.thinkingMode = "deep";
-      localStorage.setItem("swarm_think_mode", "deep");
+      localStorage.setItem("webslice_think_mode", "deep");
       updateThinkModeUI("deep");
       toast("🧠 Deep Thinking: generating full chain of thought");
       broadcastAll({ t: "ai-think-mode", mode: "deep" });
@@ -2733,7 +2758,7 @@ function updateFallbackModeUI(enabled) {
   if (sfcDesc) {
     sfcDesc.textContent = enabled
       ? "⚡ Active · Cloud API (0 GB download)"
-      : "Disabled · using local WebGPU swarm";
+      : "Disabled · using local WebGPU WebSlice";
   }
 }
 
@@ -2744,7 +2769,7 @@ function toggleFallbackMode(forceState) {
     window.fallbackmode = fallbackmode;
     window.isGroqMode = isGroqMode;
     try {
-      localStorage.setItem("swarm_fallbackmode", fallbackmode ? "true" : "false");
+      localStorage.setItem("webslice_fallbackmode", fallbackmode ? "true" : "false");
     } catch {}
   }
   if ($("model-groq-badge")) {
@@ -2781,9 +2806,9 @@ function toggleFallbackMode(forceState) {
     if ($("ai-start")) $("ai-start").style.display = "";
     if ($("ai-need")) $("ai-need").style.display = "";
     updateCluster();
-    toast("Cloud Mode DISABLED: using WebGPU Swarm");
+    toast("Cloud Mode DISABLED: using WebGPU WebSlice");
     aiStatus(ai.engine ? `cluster online · serving ${formatLayerRange(ai.range, ai.role === "host")}` : "split across every device in the room");
-    mascot("Swarm WebGPU mode active. Pick a model and press Start to download weights.");
+    mascot("WebSlice WebGPU mode active. Pick a model and press Start to download weights.");
   }
 }
 
@@ -2814,7 +2839,7 @@ function setupFallbackModeToggle() {
 }
 setupFallbackModeToggle();
 
-mascot("Hi! I'm Swarmy. Create a room, or type a friend's code to join one.");
+mascot("Hi! I'm WebSlicey. Create a room, or type a friend's code to join one.");
 
 window.fallbackmode = fallbackmode;
 window.toggleFallbackMode = toggleFallbackMode;
@@ -2825,4 +2850,4 @@ window.perfSidebar = perfSidebar;
 window.GROQ_MODEL_MAP = GROQ_MODEL_MAP;
 window.__roomStart = start;
 window.__roomLoaded = true;
-console.log("SwarmLLM room.js initialized successfully (fallbackmode ready, perfSidebar active)");
+console.log("WebSlice room.js initialized successfully (fallbackmode ready, perfSidebar active)");

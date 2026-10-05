@@ -420,10 +420,13 @@ export function dequantF32(info, bytes) {
 export function tokenizerFromGGUF(meta) {
   const tokens = meta["tokenizer.ggml.tokens"];
   const merges = meta["tokenizer.ggml.merges"];
+  if (!Array.isArray(tokens) || tokens.length === 0) {
+    throw new Error("GGUF header is missing tokenizer tokens; check the model file and retry loading.");
+  }
   const tj = {
     model: {
       vocab: Object.fromEntries(tokens.map((t, i) => [t, i])),
-      merges,
+      merges: Array.isArray(merges) ? merges : [],
     },
   };
   return tj; // caller passes through makeTokenizer-compatible builder
@@ -655,6 +658,13 @@ export function validateRangeResponse(r, expectedOffset, expectedLength, tensorN
   }
 }
 
+function readWithIdleTimeout(reader, timeoutMs = 60_000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`download paused for ${Math.round(timeoutMs / 1000)} seconds`)), timeoutMs);
+    reader.read().then((value) => { clearTimeout(timer); resolve(value); }, (err) => { clearTimeout(timer); reject(err); });
+  });
+}
+
 // Stream a Q4_0 / Q8_0 tensor straight from the network into GPU buffers.
 // Nothing tensor-sized ever exists in JS: chunks arrive, whole blocks are
 // repacked into a small reused staging area and written out, the rest waits
@@ -707,7 +717,7 @@ export async function streamEntryToGPU(device, info, openRange, { pace = 0, stag
       if (!r.body) throw new Error(`empty response body for ${info.name}`);
       reader = r.body.getReader();
       for (;;) {
-        const { value, done } = await reader.read();
+        const { value, done } = await readWithIdleTimeout(reader);
         if (done) break;
         bytesRead += value.byteLength;
         reportChunk(value.byteLength);

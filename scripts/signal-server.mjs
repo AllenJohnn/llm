@@ -1,4 +1,4 @@
-// Local PeerServer for SwarmLLM Zero-Config Offline & Local Signaling
+// Local PeerServer for WebSlice Zero-Config Offline & Local Signaling
 // Eliminates reliance on public 0.peerjs.com, works completely offline.
 // Usage:
 //   node scripts/signal-server.mjs [--port 9000]
@@ -10,7 +10,7 @@ const port = parseInt(process.argv.includes("--port")
   : (process.env.SIGNAL_PORT || 9000), 10);
 
 console.log("\n=======================================================");
-console.log("       SwarmLLM Local Signaling Server (PeerServer)    ");
+console.log("       WebSlice Local Signaling Server (PeerServer)    ");
 console.log("=======================================================\n");
 
 const clients = new Map();
@@ -22,14 +22,14 @@ const peerServer = PeerServer({
     origin: true,
   },
 }, (server) => {
-  console.log(`[SwarmLLM Signal] Running on ws://localhost:${port}/ (HTTP: http://localhost:${port}/)`);
-  console.log(`[SwarmLLM Signal] Connect clients via: ?signal=localhost:${port}\n`);
+  console.log(`[WebSlice Signal] Running on ws://localhost:${port}/ (HTTP: http://localhost:${port}/)`);
+  console.log(`[WebSlice Signal] Connect clients via: ?signal=localhost:${port}\n`);
 });
 
 peerServer.on("connection", (client) => {
   const id = client.getId();
   clients.set(id, Date.now());
-  const isHost = id.startsWith("swarmllm-room-");
+  const isHost = id.startsWith("webslice-room-");
   const type = isHost ? "🏠 HOST" : "💻 PEER";
   console.log(`[+] ${type} connected: ${id} (total active: ${clients.size})`);
 });
@@ -41,6 +41,6 @@ peerServer.on("disconnect", (client) => {
 });
 
 process.on("SIGINT", () => {
-  console.log("\n[SwarmLLM Signal] Shutting down...");
+  console.log("\n[WebSlice Signal] Shutting down...");
   process.exit(0);
 });

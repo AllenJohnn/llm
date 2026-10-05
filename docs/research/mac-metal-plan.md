@@ -90,7 +90,7 @@ H0 and H1 are **gates**, not hypotheses to optimize against. Run them first; if 
 Two new artifacts are required, because **every file in `benchmarks/` is Deno-only** (`Deno.open`, `Deno.env`, `../models/q38/model.gguf`) **and `benchmarks/` is listed in `.vercelignore`** — it is not deployed. So:
 
 - **`/bench.html` at the repo root** — synthetic micro-benchmarks, no model, imports from `engine/` (which *is* deployed). Runs in under a minute.
-- **`#probe` mode in `p2p.html`/`room.js`** — model-resident probes reusing the weights already in the Cache API (`swarmllm-weights-v1`, same origin). `room.js` has no URL-param handling today (`#debug` at `room.js:585` is the only hash branch); add `location.hash.includes("probe")`.
+- **`#probe` mode in `p2p.html`/`room.js`** — model-resident probes reusing the weights already in the Cache API (`webslice-weights-v1`, same origin). `room.js` has no URL-param handling today (`#debug` at `room.js:585` is the only hash branch); add `location.hash.includes("probe")`.
 
 ### Step 0 — environment (10 min, no code)
 
