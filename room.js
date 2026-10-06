@@ -20,14 +20,14 @@ import { perfSidebar } from "./room/perf-sidebar.js";
 // Private presentation flag for screen recordings and personal demos: /room?local-demo=1
 const LOCAL_DEMO_PRESENTATION = new URLSearchParams(location.search).get("local-demo") === "1";
 
-// Cloud routing is the default, but is always identified in the UI. Remember the user's choice.
+// Local WebGPU is the default, but keep a user's explicit mode choice.
 function initialCloudMode() {
   try {
     const saved = localStorage.getItem("webslice_fallbackmode");
     if (saved === "true") return true;
     if (saved === "false") return false;
   } catch {}
-  return true;
+  return false;
 }
 var isGroqMode = LOCAL_DEMO_PRESENTATION || initialCloudMode();
 var fallbackmode = isGroqMode;
@@ -40,7 +40,7 @@ if (typeof window !== "undefined") {
     }
     let savedMode = null;
     try { savedMode = localStorage.getItem("webslice_fallbackmode"); } catch {}
-    if (!LOCAL_DEMO_PRESENTATION && savedMode === null && typeof env.FALLBACKMODE === "boolean") {
+    if (!LOCAL_DEMO_PRESENTATION && savedMode === null && typeof env.FALLBACKMODE === "boolean" && env.FALLBACKMODE !== isGroqMode) {
       toggleFallbackMode(env.FALLBACKMODE);
     }
   }).catch(() => {});
@@ -435,8 +435,8 @@ function updateCluster() {
       meta: myMeta || {},
       rtt: null,
       bw: null,
-      layers: ai?.layersByName ? ai.layersByName[myName] : null,
-      workerRole: (ai?.layersByName && ai.layersByName[myName]) ? (hostDevId === "self" ? "Host" : "Worker") : "Idle"
+      layers: !isGroqMode && ai?.layersByName ? ai.layersByName[myName] : null,
+      workerRole: (!isGroqMode && ai?.layersByName && ai.layersByName[myName]) ? (hostDevId === "self" ? "Host" : "Worker") : "Idle"
     },
     ...[...members.entries()].map(([id, m]) => {
       const c = conns.get(id);
@@ -448,8 +448,8 @@ function updateCluster() {
         meta: m.meta || c?.meta || {},
         rtt: c?.rtt ?? null,
         bw: c?.bw ?? null,
-        layers: ai?.layersByName ? ai.layersByName[name] : null,
-        workerRole: (ai?.layersByName && ai.layersByName[name]) ? (hostDevId === id ? "Host" : "Worker") : "Idle"
+        layers: !isGroqMode && ai?.layersByName ? ai.layersByName[name] : null,
+        workerRole: (!isGroqMode && ai?.layersByName && ai.layersByName[name]) ? (hostDevId === id ? "Host" : "Worker") : "Idle"
       };
     })
   ];
@@ -2021,9 +2021,9 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
     if (!continuation.isContinuation) {
       chatUser(asker, text);
       chatBotStart();
-      const deviceCount = perfSidebar?.devices?.length || 1;
-      sendChat({ t: "ai-genstart", name: asker, text, model: mLabel, deviceCount }, askerId);
-      perfSidebar?.onGenStart?.({ model: mLabel, deviceCount });
+      const deviceCount = 1;
+      sendChat({ t: "ai-genstart", name: asker, text, model: mLabel, deviceCount, backend: "cloud" }, askerId);
+      perfSidebar?.onGenStart?.({ model: mLabel, deviceCount, backend: "cloud" });
     }
     mascot(LOCAL_DEMO_PRESENTATION ? "Generating response…" : `Routing prompt to ${mLabel}…`);
     aiStatus(LOCAL_DEMO_PRESENTATION ? "generating response…" : `streaming from ${mLabel}…`);
@@ -2191,9 +2191,9 @@ async function aiGenerate(textArg, who, askerId = peer.id, continuation = {}) {
     chatUser(asker, text);
     chatBotStart();
     const modelLabel = MODELS[ai.model]?.label?.split("·")[0]?.trim() || ai.model;
-    const deviceCount = perfSidebar?.devices?.length || 1;
-    sendChat({ t: "ai-genstart", name: asker, text, model: modelLabel, deviceCount }, askerId);
-    perfSidebar?.onGenStart?.({ model: modelLabel, deviceCount });
+    const deviceCount = Math.max(1, perfSidebar?.devices?.filter(d => d.workerRole && d.workerRole !== "Idle").length || 1);
+    sendChat({ t: "ai-genstart", name: asker, text, model: modelLabel, deviceCount, backend: "local" }, askerId);
+    perfSidebar?.onGenStart?.({ model: modelLabel, deviceCount, backend: "local" });
   }
   mascot("Thinking… every word is taking a lap through the room.");
   aiStatus(`prefill: ${ids.length} tokens…`);
@@ -2685,7 +2685,7 @@ async function aiOnData(from, d) {
       chatBotStart();
       setSendButtonState("stop");
       mascot(`${d.name} asked something. Thinking…`);
-      perfSidebar?.onGenStart?.({ model: d.model || (MODELS[ai.model]?.label?.split("·")[0]?.trim() || ai.model), deviceCount: d.deviceCount });
+      perfSidebar?.onGenStart?.({ model: d.model || (MODELS[ai.model]?.label?.split("·")[0]?.trim() || ai.model), deviceCount: d.deviceCount, backend: d.backend || "local" });
       break;
     case "ai-token":
       ai.remoteReply = (ai.remoteReply || "") + d.text;
@@ -2885,6 +2885,7 @@ function toggleFallbackMode(forceState) {
     } catch {}
   }
   updateFallbackModeUI(fallbackmode);
+  perfSidebar?.setBackend?.(fallbackmode ? "cloud" : "local");
   if (fallbackmode) {
     aiLoading(false);
     if ($("load-card")) $("load-card").classList.remove("on");
@@ -2897,6 +2898,7 @@ function toggleFallbackMode(forceState) {
     if ($("ai-empty")) $("ai-empty").style.display = "none";
     if ($("ai-start")) $("ai-start").disabled = false;
     updateNeed(0);
+    updateCluster();
     const m = $("ai-model")?.value || "qwen3.8-27b";
     toast(LOCAL_DEMO_PRESENTATION ? "Local model mode enabled" : `⚡ Groq Cloud enabled: ${getGroqModelId(m)}`);
     aiStatus(LOCAL_DEMO_PRESENTATION ? "local model ready" : `Groq Cloud active · ${getGroqModelId(m)} · prompts sent to Groq`);
@@ -2922,6 +2924,7 @@ function toggleFallbackMode(forceState) {
 
 function setupFallbackModeToggle() {
   updateFallbackModeUI(fallbackmode);
+  perfSidebar?.setBackend?.(fallbackmode ? "cloud" : "local");
   updateGroqModelBadge();
   if (LOCAL_DEMO_PRESENTATION) {
     if ($("mode-fallback")) $("mode-fallback").style.display = "none";

@@ -1,5 +1,5 @@
-// WebSLICE Performance & Scaling Analytics Sidebar
-// Real-time live token generation velocity graph + Multi-device grid processing representation + Multi-system scalability efficiency curve.
+// WebSLICE performance and scaling analytics.
+// Room throughput is measured from the single sampled output stream; device cards show shard participation.
 
 const DEVICE_COLORS = [
   "#2b4eff", // 0: Royal Cobalt (Host / You)
@@ -67,13 +67,25 @@ export class PerfSidebar {
     this.totalGenerationTime = 0;
     this.currentModel = "";
     this.currentDeviceCount = 1;
+    this.backend = "local";
+    this.lastInstantTps = 0;
+    this.flowSignature = "";
     this.sessionHistory = [];
     this.sessionStorageKey = "webslice_perf_history_v1";
+    this.devicePerformanceStorageKey = "webslice_device_performance_v1";
+    this.devicePerformance = [];
     try {
       const saved = sessionStorage.getItem(this.sessionStorageKey);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) this.sessionHistory = parsed;
+      }
+    } catch {}
+    try {
+      const savedComparisons = localStorage.getItem(this.devicePerformanceStorageKey);
+      if (savedComparisons) {
+        const parsed = JSON.parse(savedComparisons);
+        if (Array.isArray(parsed)) this.devicePerformance = parsed.filter(item => item && typeof item.model === "string");
       }
     } catch {}
     this.sessionTokens = this.sessionHistory.reduce((sum, item) => sum + (Number(item.tokens) || 0), 0);
@@ -94,6 +106,7 @@ export class PerfSidebar {
     this.setupListeners();
     this.setupCanvases();
     this.updateDeviceListUI();
+    this.renderDevicePerformance();
     this.renderScalingChart();
     this.renderLiveChart();
     this.renderSessionChart();
@@ -121,6 +134,12 @@ export class PerfSidebar {
     this.renderSessionChart();
   }
 
+  setBackend(backend) {
+    this.backend = backend === "cloud" ? "cloud" : "local";
+    this.renderShardFlow(this.lastInstantTps);
+    this.renderScalingChart();
+  }
+
   injectStyles() {
     if (document.getElementById("perf-sidebar-styles")) return;
     const style = document.createElement("style");
@@ -128,53 +147,53 @@ export class PerfSidebar {
     style.textContent = `
       /* ---- WebSLICE Performance & Scaling Sidebar ---- */
       #perf-sidebar {
-        width: 330px;
-        flex: none;
+        flex: 1 1 360px;
+        max-width: 500px;
+        min-width: 310px;
+        width: auto !important;
         display: flex;
         flex-direction: column;
-        border-left: 1px solid var(--border);
-        background: color-mix(in srgb, var(--panel) 90%, transparent);
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        background: color-mix(in srgb, var(--panel) 85%, transparent);
         overflow-y: auto;
         overflow-x: hidden;
         min-height: 0;
         transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1),
-                    width 0.28s cubic-bezier(0.2, 0.8, 0.2, 1),
-                    margin-right 0.28s cubic-bezier(0.2, 0.8, 0.2, 1),
                     opacity 0.2s ease;
         z-index: 25;
+        box-shadow: 0 4px 20px rgba(20, 21, 26, 0.04);
       }
       #perf-sidebar.collapsed {
-        margin-right: -330px;
-        width: 0;
-        border-left-color: transparent;
-        pointer-events: none;
-        opacity: 0;
+        display: none;
       }
-      @media (max-width: 1120px) {
+      @media (max-width: 1200px) {
         #perf-sidebar {
           position: fixed;
           top: 61px;
           right: 0;
           bottom: 0;
-          width: 320px;
-          background: var(--panel);
+          width: 360px !important;
+          max-width: 90vw;
+          border-radius: 0;
           box-shadow: -8px 0 32px rgba(20, 21, 26, 0.14);
           z-index: 90;
         }
         #perf-sidebar.collapsed {
+          display: flex;
           transform: translateX(100%);
           margin-right: 0;
-          width: 320px;
+          width: 360px !important;
         }
       }
       @media (max-width: 640px) {
         #perf-sidebar {
-          width: 100vw;
+          width: 100vw !important;
           max-width: 100vw;
         }
         #perf-sidebar.collapsed {
           transform: translateX(100%);
-          width: 100vw;
+          width: 100vw !important;
         }
       }
 
@@ -182,13 +201,13 @@ export class PerfSidebar {
       .topbar-perf-chip {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        gap: 8px;
         background: var(--panel);
         border: 1px solid var(--border);
         border-radius: 100px;
-        padding: 5px 12px 5px 10px;
+        padding: 6px 14px 6px 12px;
         font-family: var(--mono);
-        font-size: 11.5px;
+        font-size: 13.5px;
         color: var(--text);
         cursor: pointer;
         user-select: none;
@@ -250,7 +269,7 @@ export class PerfSidebar {
       }
       .perf-title {
         font-family: var(--mono);
-        font-size: 11px;
+        font-size: 13.5px;
         letter-spacing: 0.14em;
         font-weight: 700;
         color: var(--text);
@@ -265,10 +284,10 @@ export class PerfSidebar {
         align-items: center;
         gap: 5px;
         font-family: var(--mono);
-        font-size: 9.5px;
+        font-size: 12px;
         font-weight: 600;
         letter-spacing: 0.05em;
-        padding: 2px 7px;
+        padding: 3px 8px;
         border-radius: 100px;
         background: var(--panel-2);
         color: var(--muted);
@@ -281,8 +300,8 @@ export class PerfSidebar {
         border-color: color-mix(in srgb, var(--accent) 40%, transparent);
       }
       .perf-status-dot {
-        width: 6px;
-        height: 6px;
+        width: 7px;
+        height: 7px;
         border-radius: 50%;
         background: var(--muted);
       }
@@ -325,25 +344,25 @@ export class PerfSidebar {
         align-items: center;
         justify-content: space-between;
         font-family: var(--mono);
-        font-size: 10px;
+        font-size: 13px;
         letter-spacing: 0.16em;
         color: var(--muted);
         font-weight: 600;
         text-transform: uppercase;
       }
       .perf-unit {
-        font-size: 10px;
+        font-size: 12px;
         font-weight: 500;
         color: var(--text);
         text-transform: none;
         letter-spacing: 0;
       }
       .perf-badge-pill {
-        font-size: 9.5px;
+        font-size: 12px;
         font-weight: 600;
         color: var(--accent);
         background: color-mix(in srgb, var(--accent) 12%, transparent);
-        padding: 2px 7px;
+        padding: 3px 8px;
         border-radius: 100px;
         letter-spacing: 0;
       }
@@ -362,7 +381,7 @@ export class PerfSidebar {
       }
       .perf-hero-val {
         font-family: var(--sans);
-        font-size: 34px;
+        font-size: 38px;
         font-weight: 700;
         line-height: 1;
         letter-spacing: -0.03em;
@@ -373,14 +392,14 @@ export class PerfSidebar {
       }
       .perf-hero-unit {
         font-family: var(--mono);
-        font-size: 11px;
+        font-size: 13.5px;
         font-weight: 600;
         color: var(--muted);
         letter-spacing: 0.08em;
       }
       .perf-hero-sub {
         font-family: var(--mono);
-        font-size: 10.5px;
+        font-size: 13px;
         color: var(--muted);
         margin-top: 2px;
       }
@@ -466,6 +485,108 @@ export class PerfSidebar {
         display: none;
       }
 
+      /* Animated model-shard flow: the stream rate is shared, each node shows its assigned work. */
+      .perf-flow {
+        grid-column: 1 / -1;
+        padding: 14px 16px;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 5%, white), white 68%);
+        overflow: hidden;
+      }
+      .perf-flow-head, .perf-flow-readouts {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+      }
+      .perf-flow-title { font: 600 13px/1.3 var(--sans); color: var(--text); }
+      .perf-flow-state { font: 11px/1.3 var(--sans); color: var(--muted); }
+      .perf-flow-track {
+        display: flex;
+        align-items: center;
+        gap: 0;
+        margin: 16px 0 12px;
+        overflow-x: auto;
+        scrollbar-width: thin;
+        padding: 3px 2px 8px;
+      }
+      .perf-flow-node {
+        position: relative;
+        z-index: 1;
+        flex: 0 0 auto;
+        min-width: 112px;
+        max-width: 180px;
+        padding: 9px 11px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: rgba(255,255,255,.94);
+        transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
+      }
+      .perf-flow-node-top { display: flex; align-items: center; gap: 7px; min-width: 0; }
+      .perf-flow-node-dot {
+        width: 8px; height: 8px; border-radius: 50%; flex: none;
+        background: var(--device-color, var(--accent));
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--device-color, var(--accent)) 13%, transparent);
+      }
+      .perf-flow-node-name {
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        font: 600 12px/1.2 var(--sans); color: var(--text);
+      }
+      .perf-flow-node-range {
+        display: block; margin: 6px 0 0 15px;
+        font: 10.5px/1.25 var(--sans); color: var(--muted);
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .perf-flow-node--prompt, .perf-flow-node--answer {
+        border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+        background: color-mix(in srgb, var(--accent) 5%, white);
+      }
+      .perf-flow-node-step {
+        display: block; margin: 6px 0 0 15px;
+        font: 10.5px/1.25 var(--sans); color: var(--muted);
+      }
+      .perf-chart-title { margin: 4px 0 8px; font: 500 12px/1.4 var(--sans); color: var(--muted); }
+      .perf-flow-link {
+        position: relative; flex: 1 0 30px; height: 2px; min-width: 30px;
+        background: color-mix(in srgb, var(--accent) 20%, var(--border));
+      }
+      .perf-flow-pulse {
+        position: absolute; top: 50%; left: 0; width: 7px; height: 7px;
+        border-radius: 50%; background: var(--accent); transform: translate(-50%, -50%);
+        opacity: 0; box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 70%, transparent);
+      }
+      .perf-flow.streaming .perf-flow-node {
+        border-color: color-mix(in srgb, var(--device-color, var(--accent)) 38%, var(--border));
+        animation: perfShardPulse 1.25s ease-in-out infinite alternate;
+      }
+      .perf-flow.streaming .perf-flow-node:nth-of-type(4n + 1) { animation-delay: -.2s; }
+      .perf-flow.streaming .perf-flow-node:nth-of-type(4n + 2) { animation-delay: -.45s; }
+      .perf-flow.streaming .perf-flow-node:nth-of-type(4n + 3) { animation-delay: -.7s; }
+      .perf-flow.streaming .perf-flow-pulse { opacity: 1; animation: perfFlowTravel var(--perf-flow-duration, 1s) ease-in-out infinite; }
+      .perf-flow.streaming .perf-flow-link:nth-child(4n + 2) .perf-flow-pulse { animation-delay: -.35s; }
+      .perf-flow.streaming .perf-flow-link:nth-child(4n + 4) .perf-flow-pulse { animation-delay: -.65s; }
+      @keyframes perfShardPulse {
+        from { box-shadow: 0 0 0 rgba(0,122,255,0); transform: translateY(0); }
+        to { box-shadow: 0 5px 18px rgba(0,122,255,.09); transform: translateY(-2px); }
+      }
+      @keyframes perfFlowTravel {
+        from { left: 0; }
+        to { left: 100%; }
+      }
+      .perf-flow-readouts {
+        justify-content: flex-start; flex-wrap: wrap;
+        padding-top: 10px; border-top: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+      }
+      .perf-flow-metric { font: 11px/1.35 var(--sans); color: var(--muted); }
+      .perf-flow-metric b { margin-left: 4px; color: var(--text); font-weight: 600; }
+      .perf-flow-note { display: block; margin-top: 8px; font: 11px/1.45 var(--sans); color: var(--muted); }
+      .perf-flow-empty { padding: 12px 2px; color: var(--muted); font: 12px/1.45 var(--sans); }
+      @media (prefers-reduced-motion: reduce) {
+        .perf-flow.streaming .perf-flow-node, .perf-flow.streaming .perf-flow-pulse { animation: none; }
+        .perf-flow.streaming .perf-flow-pulse { opacity: .9; left: 50%; }
+      }
+
       /* Grid Devices Live Processing Breakdown */
       .perf-devices-breakdown-wrap {
         display: flex;
@@ -499,14 +620,14 @@ export class PerfSidebar {
         min-width: 0;
       }
       .perf-dev-dot {
-        width: 8px;
-        height: 8px;
+        width: 9px;
+        height: 9px;
         border-radius: 50%;
         flex: none;
       }
       .perf-dev-name {
         font-family: var(--mono);
-        font-size: 11px;
+        font-size: 13.5px;
         font-weight: 600;
         color: var(--text);
         white-space: nowrap;
@@ -515,11 +636,11 @@ export class PerfSidebar {
       }
       .perf-dev-stage-badge {
         font-family: var(--mono);
-        font-size: 9px;
+        font-size: 11px;
         font-weight: 500;
         color: var(--muted);
         background: var(--panel-2);
-        padding: 1px 5px;
+        padding: 2px 6px;
         border-radius: 4px;
         border: 1px solid var(--border);
       }
@@ -531,17 +652,17 @@ export class PerfSidebar {
       }
       .perf-dev-tps {
         font-family: var(--mono);
-        font-size: 12px;
+        font-size: 14.5px;
         font-weight: 700;
         color: var(--text);
       }
       .perf-dev-toks {
         font-family: var(--mono);
-        font-size: 10px;
+        font-size: 12px;
         color: var(--muted);
       }
       .perf-dev-meter-track {
-        height: 4px;
+        height: 5px;
         background: color-mix(in srgb, var(--border) 70%, transparent);
         border-radius: 100px;
         overflow: hidden;
@@ -557,7 +678,7 @@ export class PerfSidebar {
         align-items: center;
         justify-content: space-between;
         font-family: var(--mono);
-        font-size: 9.5px;
+        font-size: 12px;
         color: var(--muted);
       }
 
@@ -572,30 +693,46 @@ export class PerfSidebar {
         background: var(--panel);
         border: 1px solid var(--border);
         border-radius: 10px;
-        padding: 8px 10px;
+        padding: 9px 12px;
         display: flex;
         flex-direction: column;
         gap: 3px;
       }
       .perf-stat-k {
         font-family: var(--mono);
-        font-size: 9px;
+        font-size: 11.5px;
         letter-spacing: 0.12em;
         color: var(--muted);
         font-weight: 600;
       }
       .perf-stat-v {
         font-family: var(--mono);
-        font-size: 13px;
+        font-size: 16px;
         font-weight: 600;
         color: var(--text);
       }
+      .perf-compare {
+        margin-top: 14px;
+        padding: 14px;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: var(--panel);
+      }
+      .perf-compare-title { font: 600 13px/1.3 var(--sans); color: var(--text); }
+      .perf-compare-model { margin-top: 3px; font: 11px/1.35 var(--sans); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .perf-compare-grid { display: grid; grid-template-columns: minmax(94px, 1.35fr) repeat(3, minmax(48px, .8fr)); gap: 6px; align-items: center; }
+      .perf-compare-head { margin-top: 13px; padding: 0 6px 6px; color: var(--muted); font: 9px/1.2 var(--sans); }
+      .perf-compare-row { min-height: 48px; padding: 7px 6px; border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent); color: var(--text); font: 11px/1.2 var(--sans); }
+      .perf-compare-count { font-weight: 600; }
+      .perf-compare-detail { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; font-weight: 400; }
+      .perf-compare-value { font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .perf-compare-empty { margin-top: 12px; color: var(--muted); font: 11px/1.45 var(--sans); }
 
       /* Scalability section */
       .perf-desc {
-        font-size: 12px;
+        font-size: 13.5px;
         color: var(--muted);
-        line-height: 1.45;
+        line-height: 1.5;
         margin-bottom: 2px;
       }
       .perf-scaling-legend {
@@ -609,8 +746,8 @@ export class PerfSidebar {
         align-items: center;
         justify-content: space-between;
         font-family: var(--mono);
-        font-size: 11px;
-        padding: 4px 8px;
+        font-size: 13px;
+        padding: 5px 10px;
         border-radius: 6px;
         background: var(--panel);
         border: 1px solid transparent;
@@ -634,10 +771,10 @@ export class PerfSidebar {
         gap: 6px;
       }
       .scaling-active-tag {
-        font-size: 8.5px;
+        font-size: 10.5px;
         background: var(--accent);
         color: #fff;
-        padding: 1px 4px;
+        padding: 1px 5px;
         border-radius: 3px;
         font-weight: 700;
         letter-spacing: 0.05em;
@@ -657,9 +794,9 @@ export class PerfSidebar {
         display: grid;
         grid-template-columns: 1fr auto;
         gap: 2px 8px;
-        padding: 6px 8px;
+        padding: 7px 10px;
         border: 1px solid var(--border);
-        border-radius: 7px;
+        border-radius: 8px;
         background: var(--panel);
       }
       .perf-history-main, .perf-history-sub {
@@ -667,17 +804,17 @@ export class PerfSidebar {
         align-items: center;
         gap: 5px;
       }
-      .perf-history-main { color: var(--text); font-size: 10.5px; }
-      .perf-history-sub { grid-column: 1 / -1; color: var(--muted); font-size: 9.5px; }
+      .perf-history-main { color: var(--text); font-size: 12.5px; }
+      .perf-history-sub { grid-column: 1 / -1; color: var(--muted); font-size: 11.5px; }
       .perf-history-dot {
-        width: 7px;
-        height: 7px;
+        width: 8px;
+        height: 8px;
         border-radius: 50%;
         flex: none;
       }
       .perf-history-empty {
         color: var(--muted);
-        font-size: 10px;
+        font-size: 12.5px;
         line-height: 1.4;
         padding: 4px 0;
       }
@@ -693,7 +830,7 @@ export class PerfSidebar {
         align-items: center;
         justify-content: space-between;
         font-family: var(--mono);
-        font-size: 11.5px;
+        font-size: 13.5px;
         color: var(--muted);
         padding: 2px 0;
       }
@@ -714,7 +851,7 @@ export class PerfSidebar {
         align-items: center;
         justify-content: space-between;
         font-family: var(--mono);
-        font-size: 10.5px;
+        font-size: 12.5px;
         color: var(--muted);
       }
       .perf-dev-sess-row span {
@@ -740,7 +877,7 @@ export class PerfSidebar {
         <svg class="topbar-perf-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
         </svg>
-        <span id="topbar-perf-rate">0.0 tok/s</span>
+        <span id="topbar-perf-rate">0.0 text pieces/s</span>
       `;
       btn.onclick = () => this.toggleSidebar();
       if (topbarPeers) {
@@ -766,12 +903,12 @@ export class PerfSidebar {
               <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
             </svg>
           </div>
-          <span class="perf-title">SPEED &amp; SCALING</span>
+          <span class="perf-title">Performance</span>
         </div>
         <div class="perf-header-actions">
           <span class="perf-status-pill idle" id="perf-status-pill">
             <span class="perf-status-dot"></span>
-            <span id="perf-status-label">IDLE</span>
+            <span id="perf-status-label">Ready</span>
           </span>
           <button type="button" class="perf-close-btn" id="perf-close-btn" title="Collapse analytics sidebar" aria-label="Collapse analytics sidebar">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
@@ -782,109 +919,70 @@ export class PerfSidebar {
         </div>
       </div>
 
-      <!-- Live Token Velocity -->
+      <!-- Simple room speed and request flow -->
       <div class="perf-section">
         <div class="perf-sec-label">
-          <span>LIVE STREAM VELOCITY</span>
+          <span>LIVE ANSWER SPEED</span>
           <span class="perf-unit" id="perf-cur-model">—</span>
         </div>
         
         <div class="perf-hero-stat">
           <div class="perf-hero-main-row">
             <div class="perf-hero-val" id="perf-hero-tps">0.0</div>
-            <div class="perf-hero-unit">TOK / SEC</div>
+          <div class="perf-hero-unit">text pieces / sec</div>
           </div>
-          <div class="perf-hero-sub" id="perf-hero-sub">Solo Device Execution</div>
+          <div class="perf-hero-sub" id="perf-hero-sub">Start a local model to begin</div>
         </div>
 
-        <!-- Multi-Device Legend Chips -->
-        <div class="perf-device-legend" id="perf-device-legend"></div>
-
+        <div class="perf-chart-title">Speed while the answer is being written</div>
         <div class="perf-canvas-wrap" id="perf-live-canvas-wrap">
           <canvas id="perf-live-canvas" width="298" height="124"></canvas>
-          <div class="perf-canvas-empty" id="perf-live-empty">Send a prompt to stream live token throughput curve</div>
+          <div class="perf-canvas-empty" id="perf-live-empty">Your answer speed will appear here while it is being written.</div>
         </div>
 
-        <!-- Grid Devices Processing Breakdown -->
-        <div class="perf-devices-breakdown-wrap" id="perf-devices-breakdown-wrap">
-          <div class="perf-sec-label" style="margin-top: 4px;">
-            <span>GRID PARTICIPATION</span>
-            <span class="perf-badge-pill" id="perf-grid-share-badge">1 NODE</span>
+        <div class="perf-flow" id="perf-shard-flow">
+          <div class="perf-flow-head">
+            <span class="perf-flow-title">How your room answers</span>
+            <span class="perf-flow-state" id="perf-flow-state">Waiting for local model</span>
           </div>
-          <div id="perf-devices-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+          <div class="perf-flow-track" id="perf-flow-track" aria-label="Your prompt passes through the devices helping to create an answer"></div>
+          <div class="perf-flow-empty" id="perf-flow-empty">Start a local model. Compatible devices in the room can share the work.</div>
+          <div class="perf-flow-note" id="perf-flow-note">Your prompt is handled by the model, then the answer is written and shown here.</div>
+          <div class="perf-flow-readouts">
+            <span class="perf-flow-metric">Answer speed<b id="perf-flow-speed">0.0 text pieces/s</b></span>
+            <span class="perf-flow-metric">Devices helping<b id="perf-flow-devices">0</b></span>
+            <span class="perf-flow-metric">Average if shared evenly<b id="perf-flow-efficiency">—</b></span>
+          </div>
         </div>
 
         <div class="perf-grid">
           <div class="perf-stat-item">
-            <span class="perf-stat-k">PEAK SPEED</span>
-            <span class="perf-stat-v" id="perf-stat-peak">0.0 tok/s</span>
+            <span class="perf-stat-k">BEST SPEED</span>
+            <span class="perf-stat-v" id="perf-stat-peak">0.0 text pieces/s</span>
           </div>
           <div class="perf-stat-item">
-            <span class="perf-stat-k">TOKENS YIELDED</span>
-            <span class="perf-stat-v" id="perf-stat-tokens">0 tok</span>
+            <span class="perf-stat-k">PIECES OF TEXT</span>
+            <span class="perf-stat-v" id="perf-stat-tokens">0</span>
           </div>
           <div class="perf-stat-item">
-            <span class="perf-stat-k">TIME TO FIRST TOKEN</span>
-            <span class="perf-stat-v" id="perf-stat-ttft">— ms</span>
+            <span class="perf-stat-k">FIRST RESPONSE</span>
+            <span class="perf-stat-v" id="perf-stat-ttft">—</span>
           </div>
           <div class="perf-stat-item">
-            <span class="perf-stat-k">ELAPSED TIME</span>
+            <span class="perf-stat-k">TOTAL TIME</span>
             <span class="perf-stat-v" id="perf-stat-time">0.0s</span>
           </div>
         </div>
-      </div>
 
-      <!-- Multi-System WebSLICE Scalability -->
-      <div class="perf-section">
-        <div class="perf-sec-label">
-          <span>SWARM SCALING EFFICIENCY</span>
-          <span class="perf-badge-pill" id="perf-active-nodes-badge">1 DEVICE (SOLO)</span>
-        </div>
-        <div class="perf-desc">
-          Observed performance scales with the number of devices participating in the swarm network. Actual throughput is benchmark-dependent and affected by network latency:
-        </div>
-
-        <div class="perf-canvas-wrap" style="height: 148px;">
-          <canvas id="perf-scaling-canvas" width="298" height="148"></canvas>
-        </div>
-
-        <div class="perf-scaling-legend" id="perf-scaling-legend"></div>
-      </div>
-
-      <!-- Session Aggregates -->
-      <div class="perf-section" style="margin-top: auto; border-bottom: none;">
-        <div class="perf-sec-label">
-          <span>SESSION DEVICE COMPARISON</span>
-          <span class="perf-unit">TOKENS / CHAT</span>
-        </div>
-        <div class="perf-desc">Average speed, peak speed, answer size, and chat count grouped by connected device count.</div>
-        <div class="perf-canvas-wrap" style="height: 190px;">
-          <canvas id="perf-session-canvas" width="298" height="190" aria-label="Session performance radar chart grouped by device count"></canvas>
-          <div class="perf-canvas-empty" id="perf-session-empty">Send a chat to start a session comparison</div>
-        </div>
-        <div class="perf-session-history" id="perf-session-history" aria-live="polite"></div>
-      </div>
-
-      <!-- Session Aggregates -->
-      <div class="perf-section" style="border-bottom: none;">
-        <div class="perf-sec-label">
-          <span>ROOM SESSION TOTALS</span>
-        </div>
-        <div class="perf-summary-list">
-          <div class="perf-summary-row">
-            <span>Session Tokens</span>
-            <b id="perf-sess-tokens">0 tok</b>
+        <div class="perf-compare" aria-live="polite">
+          <div class="perf-compare-title">Saved results by device count</div>
+          <div class="perf-compare-model" id="perf-compare-model">Complete a local answer to start comparing.</div>
+          <div class="perf-compare-grid perf-compare-head" aria-hidden="true">
+            <span>Setup</span><span>Avg. pieces/s</span><span>Best pieces/s</span><span>First reply</span>
           </div>
-          <div class="perf-summary-row">
-            <span>Avg Stream Speed</span>
-            <b id="perf-sess-avg-tps">— tok/s</b>
-          </div>
-          <div class="perf-summary-row">
-            <span>Mesh Devices Online</span>
-            <b id="perf-sess-devices">1 Device</b>
-          </div>
+          <div id="perf-compare-rows"></div>
+          <div class="perf-compare-empty" id="perf-compare-empty">Your completed local answers will be saved on this browser.</div>
         </div>
-        <div class="perf-dev-sess-list" id="perf-dev-sess-list" style="display:none;"></div>
       </div>
     `;
 
@@ -976,57 +1074,28 @@ export class PerfSidebar {
     const isDistributed = activeNodes > 1;
     const heroSubEl = document.getElementById("perf-hero-sub");
     if (heroSubEl) {
-      heroSubEl.textContent = isDistributed ? "Distributed Execution" : "Solo Device Execution";
+      heroSubEl.textContent = this.backend === "cloud"
+        ? "An online AI service is writing your answer"
+        : isDistributed ? "Your devices are sharing the work" : activeNodes === 1 ? "This device is running the model" : "Start a local model to begin";
     }
     const gridShareBadgeEl = document.getElementById("perf-grid-share-badge");
     if (gridShareBadgeEl) {
-      const displayCount = activeNodes > 0 ? activeNodes : this.devices.length;
-      gridShareBadgeEl.textContent = displayCount === 1 ? "1 NODE" : `${displayCount} NODES`;
+      gridShareBadgeEl.textContent = activeNodes === 1 ? "1 ACTIVE" : `${activeNodes} ACTIVE`;
     }
+    const activeBadgeEl = document.getElementById("perf-active-nodes-badge");
+    if (activeBadgeEl) activeBadgeEl.textContent = activeNodes ? `${activeNodes} COMPUTING` : "NO LOCAL MODEL";
 
-    // 1. Legend Chips above Canvas
+    // 1. The answer stream is sampled once for the whole room, so show one room-rate series.
     const legendEl = document.getElementById("perf-device-legend");
     if (legendEl) {
       if (this.devices.length > 1) {
-        let chipsHtml = this.devices.map(d => {
-          const isDimmed = this.activeHighlightId !== null && this.activeHighlightId !== d.id;
-          return `
-            <button type="button" class="perf-legend-chip ${d.visible ? 'active' : ''} ${isDimmed ? 'dimmed' : ''}" data-dev-id="${escapeHtml(d.id)}">
-              <span class="perf-chip-dot" style="background:${d.color};"></span>
-              <span>${escapeHtml(d.name)}</span>
-              <span class="perf-chip-speed" id="legend-speed-${escapeHtml(d.id)}">${d.tps.toFixed(1)} tok/s</span>
-            </button>
-          `;
-        }).join("");
-
-        // Cluster Total Chip
-        const isClusterDimmed = this.activeHighlightId !== null && this.activeHighlightId !== "cluster";
-        chipsHtml += `
-          <button type="button" class="perf-legend-chip ${this.showClusterCurve ? 'active' : ''} ${isClusterDimmed ? 'dimmed' : ''}" data-dev-id="cluster">
-            <span class="perf-chip-dot" style="background:var(--text);"></span>
-            <span>Cluster</span>
+        legendEl.innerHTML = `
+          <span class="perf-legend-chip active" aria-label="Room output speed">
+            <span class="perf-chip-dot" style="background:var(--accent);"></span>
+            <span>Room output</span>
             <span class="perf-chip-speed" id="legend-speed-cluster">${this.peakTps.toFixed(1)} tok/s</span>
-          </button>
+          </span>
         `;
-        legendEl.innerHTML = chipsHtml;
-
-        // Add click handlers for interactive highlighting
-        legendEl.querySelectorAll(".perf-legend-chip").forEach(chip => {
-          chip.onclick = () => {
-            const devId = chip.getAttribute("data-dev-id");
-            if (devId === "cluster") {
-              this.showClusterCurve = !this.showClusterCurve;
-            } else {
-              if (this.activeHighlightId === devId) {
-                this.activeHighlightId = null; // reset filter
-              } else {
-                this.activeHighlightId = devId; // focus on this device
-              }
-            }
-            this.updateDeviceListUI();
-            this.renderLiveChart();
-          };
-        });
       } else {
         legendEl.innerHTML = "";
       }
@@ -1036,11 +1105,10 @@ export class PerfSidebar {
     const listEl = document.getElementById("perf-devices-list");
     if (listEl) {
       listEl.innerHTML = this.devices.map(d => {
-        const pct = this.tokenCount > 0 ? Math.min(100, Math.round((d.tokens / this.tokenCount) * 100)) : 100;
         const gpuMeta = d.meta?.gpu || (d.meta?.webgpu ? "WebGPU" : "Mesh Node");
         const latMeta = d.rtt !== null ? `RTT: ${d.rtt}ms` : "Local Host";
 
-        const workerText = d.workerRole === "Worker" ? "Distributed Worker" : (d.workerRole === "Host" ? "Host" : (d.stage || "Idle"));
+        const workerText = d.workerRole === "Worker" ? "Model shard" : (d.workerRole === "Host" ? "Host · output sampler" : (d.stage || "Idle"));
         return `
           <div class="perf-dev-card ${this.isStreaming ? 'streaming' : ''}" id="dev-card-${escapeHtml(d.id)}">
             <div class="perf-dev-top">
@@ -1050,15 +1118,8 @@ export class PerfSidebar {
                 <span class="perf-dev-stage-badge">${escapeHtml(workerText)}</span>
               </div>
               <div class="perf-dev-rates">
-                ${d.workerRole === "Worker"
-                  ? `<span class="perf-dev-toks" id="dev-role-${escapeHtml(d.id)}">${escapeHtml(d.layers)}</span>`
-                  : `<span class="perf-dev-tps" id="dev-tps-${escapeHtml(d.id)}">${d.tps.toFixed(1)} tok/s</span>
-                     <span class="perf-dev-toks" id="dev-toks-${escapeHtml(d.id)}">${d.tokens} tok</span>`
-                }
+                <span class="perf-dev-toks" id="dev-role-${escapeHtml(d.id)}">${escapeHtml(d.layers || (d.workerRole === "Host" ? "Samples the shared output" : "Waiting for a model shard"))}</span>
               </div>
-            </div>
-            <div class="perf-dev-meter-track">
-              <div class="perf-dev-meter-fill" id="dev-meter-${escapeHtml(d.id)}" style="width:${pct}%; background:${d.color};"></div>
             </div>
             <div class="perf-dev-foot">
               <span>${escapeHtml(gpuMeta)}</span>
@@ -1067,6 +1128,90 @@ export class PerfSidebar {
           </div>
         `;
       }).join("");
+    }
+    this.renderShardFlow(this.lastInstantTps);
+  }
+
+  renderShardFlow(speed = this.lastInstantTps) {
+    if (typeof document === "undefined") return;
+    const flow = document.getElementById("perf-shard-flow");
+    const track = document.getElementById("perf-flow-track");
+    const empty = document.getElementById("perf-flow-empty");
+    const state = document.getElementById("perf-flow-state");
+    const speedEl = document.getElementById("perf-flow-speed");
+    const devicesEl = document.getElementById("perf-flow-devices");
+    const efficiencyEl = document.getElementById("perf-flow-efficiency");
+    const noteEl = document.getElementById("perf-flow-note");
+    if (!flow || !track) return;
+
+    const activeDevices = this.backend === "cloud"
+      ? []
+      : this.devices.filter(device => device.workerRole && device.workerRole !== "Idle").sort((a, b) => {
+          const startLayer = device => {
+            const match = String(device.layers || "").match(/layers?\s+(\d+)/i);
+            return match ? Number(match[1]) : device.self ? -1 : Number.MAX_SAFE_INTEGER;
+          };
+          return startLayer(a) - startLayer(b);
+        });
+    const flowDevices = this.backend === "cloud"
+      ? [{ name: "Online AI service", step: "Runs the model", color: "#8e8e93" }]
+      : activeDevices.map((device, index) => ({
+          ...device,
+          step: `Part ${index + 1} of ${activeDevices.length}`
+        }));
+    const stages = flowDevices.length
+      ? [{ type: "prompt", name: "Your prompt", step: "The question you asked" }, ...flowDevices.map(device => ({ type: "device", ...device })), { type: "answer", name: "Your answer", step: "Ready to read" }]
+      : [];
+
+    const signature = `${this.backend}|${stages.map(stage => `${stage.type}:${stage.id || stage.name}:${stage.step}`).join("|")}`;
+    if (signature !== this.flowSignature) {
+      track.innerHTML = stages.map((stage, index) => {
+        const node = `<div class="perf-flow-node perf-flow-node--${stage.type}" style="--device-color:${escapeHtml(stage.color || DEVICE_COLORS[index % DEVICE_COLORS.length])}">
+          <div class="perf-flow-node-top"><span class="perf-flow-node-dot"></span><span class="perf-flow-node-name">${escapeHtml(stage.name || "Device")}</span></div>
+          <span class="perf-flow-node-step">${escapeHtml(stage.step || "Helping create your answer")}</span>
+        </div>`;
+        const link = index < stages.length - 1
+          ? '<span class="perf-flow-link" aria-hidden="true"><i class="perf-flow-pulse"></i></span>'
+          : "";
+        return node + link;
+      }).join("");
+      this.flowSignature = signature;
+    }
+
+    const activeCount = activeDevices.length;
+    if (empty) {
+      empty.style.display = stages.length ? "none" : "block";
+      empty.textContent = "Start a local model. Compatible devices in the room can share the work.";
+    }
+    if (state) {
+      state.textContent = this.backend === "cloud"
+        ? this.isStreaming ? "Online service is writing your answer…" : this.tokenCount > 0 ? "Your answer is ready" : "Online service is ready"
+        : activeCount
+          ? this.isStreaming
+            ? "Working on your answer…"
+            : this.tokenCount > 0 ? "Your answer is ready" : `${activeCount} ${activeCount === 1 ? "device is" : "devices are"} ready to help`
+          : "Waiting for local model";
+    }
+    if (speedEl) speedEl.textContent = `${Math.max(0, Number(speed) || 0).toFixed(1)} text pieces/s`;
+    if (devicesEl) devicesEl.textContent = String(activeCount);
+    if (efficiencyEl) efficiencyEl.textContent = activeCount ? `${(Math.max(0, Number(speed) || 0) / activeCount).toFixed(1)} text pieces/s` : "—";
+    if (noteEl) {
+      noteEl.textContent = this.backend === "cloud"
+        ? "This answer is being created online. Devices in your room are not helping with the calculation."
+        : activeCount
+          ? "Each device handles a different part of the AI model. The answer is shown here when the work is done. The last number is an estimate assuming the work is shared evenly."
+          : "Choose a local model to let compatible devices in your room share the work.";
+    }
+    const animationSeconds = Math.min(1.8, Math.max(0.38, 2.4 / Math.max(1, Number(speed) || 1)));
+    flow.style.setProperty("--perf-flow-duration", `${animationSeconds.toFixed(2)}s`);
+    flow.classList.toggle("streaming", this.isStreaming && (activeCount > 0 || this.backend === "cloud"));
+    flow.classList.toggle("cloud", this.backend === "cloud");
+    if (this.backend === "cloud") {
+      flow.setAttribute("aria-label", "Your prompt goes to an online AI service and the answer returns here");
+    } else {
+      flow.setAttribute("aria-label", activeCount
+        ? `Your prompt passes through ${activeCount} ${activeCount === 1 ? "device" : "devices"} helping create the answer`
+        : "Start a local model to see how devices share the work");
     }
   }
 
@@ -1077,24 +1222,7 @@ export class PerfSidebar {
     if (typeof document === "undefined") return;
 
     const clusterSpeedEl = document.getElementById("legend-speed-cluster");
-    if (clusterSpeedEl) clusterSpeedEl.textContent = `${instantTps.toFixed(1)} tok/s`;
-
-    this.devices.forEach(d => {
-      const legSpeed = document.getElementById(`legend-speed-${d.id}`);
-      if (legSpeed) legSpeed.textContent = `${d.tps.toFixed(1)} tok/s`;
-
-      const devTps = document.getElementById(`dev-tps-${d.id}`);
-      if (devTps) devTps.textContent = `${d.tps.toFixed(1)} tok/s`;
-
-      const devToks = document.getElementById(`dev-toks-${d.id}`);
-      if (devToks) devToks.textContent = `${d.tokens} tok`;
-
-      const devMeter = document.getElementById(`dev-meter-${d.id}`);
-      if (devMeter) {
-        const pct = this.tokenCount > 0 ? Math.min(100, Math.round((d.tokens / this.tokenCount) * 100)) : 100;
-        devMeter.style.width = `${pct}%`;
-      }
-    });
+    if (clusterSpeedEl) clusterSpeedEl.textContent = `${instantTps.toFixed(1)} pieces/s`;
   }
 
   updateSessionDevicesList() {
@@ -1141,52 +1269,34 @@ export class PerfSidebar {
           maintainAspectRatio: false,
           animation: { duration: 0 },
           scales: {
-            x: { type: 'linear', display: false },
-            y: { beginAtZero: true, grid: { color: 'rgba(225, 222, 210, 0.7)' } }
+            x: {
+              type: 'linear', display: true,
+              title: { display: true, text: 'Time (seconds)', color: '#86868b', font: { size: 10 } },
+              ticks: { color: '#86868b', font: { size: 9 }, maxTicksLimit: 5 },
+              grid: { display: false }
+            },
+            y: {
+              beginAtZero: true,
+              title: { display: true, text: 'Text pieces per second', color: '#86868b', font: { size: 10 } },
+              ticks: { color: '#86868b', font: { size: 9 }, maxTicksLimit: 4 },
+              grid: { color: 'rgba(225, 222, 210, 0.7)' }
+            }
           },
           plugins: { legend: { display: false } }
         }
       });
     }
 
-    const datasets = [];
-    const isMultiDevice = this.devices.length > 1;
-
-    if (!isMultiDevice && this.streamPoints.length >= 2) {
-      datasets.push({
-        label: 'Solo',
-        data: this.streamPoints.map(p => ({x: p.t, y: p.tps})),
-        borderColor: DEVICE_COLORS[0] || '#2b4eff',
-        borderWidth: 2,
-        fill: true,
-        backgroundColor: 'rgba(43, 78, 255, 0.1)',
-        tension: 0.4,
-        pointRadius: 0
-      });
-    } else if (isMultiDevice) {
-      this.devices.forEach((dev) => {
-        if (!dev.visible || dev.streamPoints.length < 2) return;
-        datasets.push({
-          label: dev.id,
-          data: dev.streamPoints.map(p => ({x: p.t, y: p.tps})),
-          borderColor: dev.color || '#8b877a',
-          borderWidth: 1.5,
-          tension: 0.4,
-          pointRadius: 0
-        });
-      });
-      if (this.showClusterCurve && this.streamPoints.length >= 2) {
-        datasets.push({
-          label: 'Cluster',
-          data: this.streamPoints.map(p => ({x: p.t, y: p.tps})),
-          borderColor: 'rgba(22, 23, 28, 0.85)',
-          borderWidth: 2,
-          borderDash: [4, 3],
-          tension: 0.4,
-          pointRadius: 0
-        });
-      }
-    }
+    const datasets = this.streamPoints.length >= 2 ? [{
+      label: 'Answer speed',
+      data: this.streamPoints.map(p => ({x: p.t, y: p.tps})),
+      borderColor: '#007aff',
+      borderWidth: 2.5,
+      fill: true,
+      backgroundColor: 'rgba(0, 122, 255, 0.1)',
+      tension: 0.4,
+      pointRadius: 0
+    }] : [];
 
     this.liveChartInstance.data.datasets = datasets;
     this.liveChartInstance.update();
@@ -1223,13 +1333,15 @@ export class PerfSidebar {
       const labels = ["1 device", "2 devices", "3 devices", "4 devices", "5+ devices"];
       const speeds = [1, 2, 3, 4, 5].map(n => this.observedScaling.get(n) || 0);
 
+      const activeNodes = this.devices.filter(d => d.workerRole && d.workerRole !== "Idle").length;
+      const currentNodes = this.backend === "cloud" ? 0 : activeNodes;
       const bgColors = [1, 2, 3, 4, 5].map(n => {
-        const isActive = (n === this.clusterSize) || (n === 5 && this.clusterSize >= 5);
+        const isActive = (n === currentNodes) || (n === 5 && currentNodes >= 5);
         return isActive ? 'rgba(43, 78, 255, 0.6)' : 'rgba(139, 135, 122, 0.2)';
       });
 
       const borderColors = [1, 2, 3, 4, 5].map(n => {
-        const isActive = (n === this.clusterSize) || (n === 5 && this.clusterSize >= 5);
+        const isActive = (n === currentNodes) || (n === 5 && currentNodes >= 5);
         return isActive ? '#2b4eff' : 'transparent';
       });
 
@@ -1248,17 +1360,17 @@ export class PerfSidebar {
         ];
         try { this.scalingChartInstance.update(); } catch (e) { console.warn("Chart update failed", e); }
       }
-      this.updateScalingLegend();
+      this.updateScalingLegend(currentNodes);
 
   }
-  updateScalingLegend() {
+  updateScalingLegend(currentNodes = this.backend === "cloud" ? 0 : this.devices.filter(d => d.workerRole && d.workerRole !== "Idle").length) {
     if (typeof document === "undefined") return;
     const legend = document.getElementById("perf-scaling-legend");
     if (!legend) return;
 
     
     legend.innerHTML = [1, 2, 3, 4, 5].map(n => {
-      const isActive = (n === this.clusterSize) || (n === 5 && this.clusterSize >= 5);
+      const isActive = (n === currentNodes) || (n === 5 && currentNodes >= 5);
       const label = n === 5 ? "5+ devices" : n + " device" + (n > 1 ? "s" : "");
       const speed = this.observedScaling.get(n);
       const speedText = speed ? speed.toFixed(1) + " tok/s" : "— waiting for benchmark";
@@ -1374,11 +1486,86 @@ export class PerfSidebar {
     }
   }
 
+  renderDevicePerformance() {
+    if (typeof document === "undefined") return;
+    const rowsEl = document.getElementById("perf-compare-rows");
+    const emptyEl = document.getElementById("perf-compare-empty");
+    const modelEl = document.getElementById("perf-compare-model");
+    if (!rowsEl || !emptyEl || !modelEl) return;
+
+    const newest = [...this.devicePerformance].sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))[0];
+    const model = this.currentModel || newest?.model || "";
+    modelEl.textContent = model
+      ? `${model} · averages of saved local answers; different prompts can affect speed.`
+      : "Complete a local answer to start comparing.";
+    const records = this.devicePerformance
+      .filter(item => item.model === model)
+      .sort((a, b) => Number(a.deviceCount) - Number(b.deviceCount));
+    const baseline = records.find(item => Number(item.deviceCount) === 1);
+
+    rowsEl.innerHTML = records.map(item => {
+      const count = Math.max(1, Math.floor(Number(item.deviceCount) || 1));
+      const runs = Math.max(1, Math.floor(Number(item.runs) || 1));
+      const speed = Number(item.totalTokens) / Math.max(0.001, Number(item.totalSeconds));
+      const peak = Number(item.bestSpeed) || 0;
+      const firstReply = Number(item.firstReplyCount) > 0
+        ? `${(Number(item.firstReplyTotal) / Number(item.firstReplyCount)).toFixed(1)}s`
+        : "—";
+      let comparison = "1-device baseline";
+      if (count !== 1 && baseline) {
+        const baseSpeed = Number(baseline.totalTokens) / Math.max(0.001, Number(baseline.totalSeconds));
+        if (baseSpeed > 0) {
+          const change = ((speed / baseSpeed) - 1) * 100;
+          comparison = `${change > 0 ? "+" : ""}${change.toFixed(0)}% vs 1`;
+        }
+      } else if (count !== 1) {
+        comparison = "run once on 1 device";
+      }
+      return `<div class="perf-compare-grid perf-compare-row">
+        <span class="perf-compare-count">${count} ${count === 1 ? "device" : "devices"}<small class="perf-compare-detail">${runs} ${runs === 1 ? "saved answer" : "saved answers"} · ${escapeHtml(comparison)}</small></span>
+        <span class="perf-compare-value">${Number.isFinite(speed) ? speed.toFixed(1) : "0.0"}/s</span>
+        <span class="perf-compare-value">${peak.toFixed(1)}/s</span>
+        <span class="perf-compare-value">${firstReply}</span>
+      </div>`;
+    }).join("");
+    emptyEl.style.display = records.length ? "none" : "block";
+    if (!records.length) emptyEl.textContent = "Your completed local answers will be saved on this browser.";
+  }
+
+  recordDevicePerformance({ totalTokens, totalSecs }) {
+    if (this.backend !== "local" || !this.currentModel) return;
+    const tokens = Math.max(0, Number(totalTokens) || 0);
+    const seconds = Math.max(0, Number(totalSecs) || 0);
+    const deviceCount = Math.max(1, Math.floor(Number(this.currentDeviceCount) || 1));
+    if (!tokens || !seconds) return;
+
+    let record = this.devicePerformance.find(item => item.model === this.currentModel && Number(item.deviceCount) === deviceCount);
+    if (!record) {
+      record = { model: this.currentModel, deviceCount, runs: 0, totalTokens: 0, totalSeconds: 0, bestSpeed: 0, firstReplyTotal: 0, firstReplyCount: 0 };
+      this.devicePerformance.push(record);
+    }
+    record.runs = (Number(record.runs) || 0) + 1;
+    record.totalTokens = (Number(record.totalTokens) || 0) + tokens;
+    record.totalSeconds = (Number(record.totalSeconds) || 0) + seconds;
+    record.bestSpeed = Math.max(Number(record.bestSpeed) || 0, Number(this.peakTps) || 0);
+    if (this.firstTokenTime !== null && this.genStartTime) {
+      record.firstReplyTotal = (Number(record.firstReplyTotal) || 0) + Math.max(0, (this.firstTokenTime - this.genStartTime) / 1000);
+      record.firstReplyCount = (Number(record.firstReplyCount) || 0) + 1;
+    }
+    record.updatedAt = new Date().toISOString();
+    this.devicePerformance = this.devicePerformance
+      .sort((a, b) => String(a.updatedAt || "").localeCompare(String(b.updatedAt || "")))
+      .slice(-200);
+    try { localStorage.setItem(this.devicePerformanceStorageKey, JSON.stringify(this.devicePerformance)); } catch {}
+    this.renderDevicePerformance();
+  }
+
   saveSessionRecord(opts = {}) {
     const totalTokens = Math.max(0, Number(opts.totalTokens ?? this.tokenCount) || 0);
     const totalSecs = Math.max(0, Number(opts.totalSecs ?? ((performance.now() - this.genStartTime) / 1000)) || 0);
     const failed = String(opts.stats || "").toLowerCase().startsWith("failed:");
     if (failed) return;
+    this.recordDevicePerformance({ totalTokens, totalSecs });
     const tokensPerSecond = totalSecs > 0 ? totalTokens / totalSecs : 0;
     this.sessionHistory.push({
       timestamp: new Date().toISOString(),
@@ -1398,15 +1585,32 @@ export class PerfSidebar {
   onGenStart(opts) {
     try {
       this.isStreaming = true;
-      this.currentModel = opts.model || '';
+      const nextModel = opts.model || '';
+      if (this.currentModel && nextModel && nextModel !== this.currentModel) this.observedScaling.clear();
+      this.currentModel = nextModel;
+      this.renderDevicePerformance();
       this.backend = opts.backend || 'local';
       this.currentDeviceCount = Math.max(1, Number(opts.deviceCount) || this.clusterSize || this.devices.length || 1);
+      const statusPill = typeof document !== 'undefined' ? document.getElementById('perf-status-pill') : null;
+      const statusLabel = typeof document !== 'undefined' ? document.getElementById('perf-status-label') : null;
+      if (statusPill) statusPill.classList.add('streaming');
+      if (statusLabel) statusLabel.textContent = 'Writing';
+      const heroSub = typeof document !== 'undefined' ? document.getElementById('perf-hero-sub') : null;
+      if (heroSub) {
+        heroSub.textContent = this.backend === 'cloud'
+          ? 'An online AI service is writing your answer'
+          : this.currentDeviceCount > 1
+            ? 'Your devices are sharing the work'
+            : 'This device is running the model';
+      }
       this.genStartTime = performance.now();
       this.firstTokenTime = null;
       this.tokenCount = 0;
       this.peakTps = 0;
       this.streamPoints = [];
       this.recentTokenTimes = [];
+      this.lastInstantTps = 0;
+      this.renderShardFlow(0);
       
       if (typeof document !== 'undefined') {
         const topBtn = document.getElementById('topbar-perf-btn');
@@ -1418,16 +1622,17 @@ export class PerfSidebar {
         }
         
         const ttftEl = document.getElementById('perf-stat-ttft');
-        if (ttftEl) ttftEl.innerText = '— ms';
+        if (ttftEl) ttftEl.innerText = '—';
         const tokEl = document.getElementById('perf-stat-tokens');
-        if (tokEl) tokEl.innerText = '0 tok';
+        if (tokEl) tokEl.innerText = '0';
         const timeEl = document.getElementById('perf-stat-time');
         if (timeEl) timeEl.innerText = '0.0s';
         const heroTps = document.getElementById('perf-hero-tps');
         if (heroTps) heroTps.innerText = '0.0';
         const peakEl = document.getElementById('perf-stat-peak');
-        if (peakEl) peakEl.innerText = '0.0 tok/s';
+        if (peakEl) peakEl.innerText = '0.0 text pieces/s';
       }
+      this.renderScalingChart();
     } catch (e) {
       console.warn("perfSidebar.onGenStart failed:", e);
     }
@@ -1443,7 +1648,7 @@ export class PerfSidebar {
         const ttft = now - this.genStartTime;
         if (typeof document !== 'undefined') {
           const ttftEl = document.getElementById('perf-stat-ttft');
-          if (ttftEl) ttftEl.innerText = Math.round(ttft) + ' ms';
+          if (ttftEl) ttftEl.innerText = `${(ttft / 1000).toFixed(1)}s`;
         }
       }
       
@@ -1477,41 +1682,35 @@ export class PerfSidebar {
         this.peakTps = instantTps;
         if (typeof document !== 'undefined') {
           const peakEl = document.getElementById('perf-stat-peak');
-          if (peakEl) peakEl.innerText = this.peakTps.toFixed(1) + ' tok/s';
+          if (peakEl) peakEl.innerText = this.peakTps.toFixed(1) + ' text pieces/s';
         }
         
-        const bucket = this.clusterSize >= 5 ? 5 : this.clusterSize;
+        const bucket = Math.min(5, Math.max(1, this.currentDeviceCount || 1));
         const currentRecord = this.observedScaling.get(bucket) || 0;
-        if (this.peakTps > currentRecord) {
+        if (this.backend === "local" && this.peakTps > currentRecord) {
           this.observedScaling.set(bucket, this.peakTps);
           this.renderScalingChart();
         }
       }
       
       this.streamPoints.push({ t: elapsedSec, tps: instantTps, total: this.tokenCount });
-      
-      const targetDev = this.devices.find(d => d.workerRole === 'Host') || this.devices.find(d => d.id === 'self');
-      if (targetDev) {
-        targetDev.tps = instantTps;
-        targetDev.tokens = this.tokenCount;
-        if (!targetDev.streamPoints) targetDev.streamPoints = [];
-        targetDev.streamPoints.push({ t: elapsedSec, tps: instantTps, total: this.tokenCount });
-      }
+      this.lastInstantTps = instantTps;
       
       if (typeof document !== 'undefined') {
         const topRate = document.getElementById('topbar-perf-rate');
-        if (topRate) topRate.innerText = instantTps.toFixed(1) + ' tok/s';
+        if (topRate) topRate.innerText = instantTps.toFixed(1) + ' text pieces/s';
         const heroTps = document.getElementById('perf-hero-tps');
         if (heroTps) heroTps.innerText = instantTps.toFixed(1);
         
         const tokEl = document.getElementById('perf-stat-tokens');
-        if (tokEl) tokEl.innerText = this.tokenCount + ' tok';
+        if (tokEl) tokEl.innerText = this.tokenCount.toLocaleString();
         
         const timeEl = document.getElementById('perf-stat-time');
         if (timeEl) timeEl.innerText = elapsedSec.toFixed(1) + 's';
       }
       
       this.updateDeviceReadouts(instantTps);
+      this.renderShardFlow(instantTps);
       this.renderLiveChart();
     } catch (e) {
       console.warn("perfSidebar.onToken failed:", e);
@@ -1525,11 +1724,15 @@ export class PerfSidebar {
       if (typeof document !== 'undefined') {
         const topBtn = document.getElementById('topbar-perf-btn');
         if (topBtn) topBtn.classList.remove('streaming');
+        const statusPill = document.getElementById('perf-status-pill');
+        const statusLabel = document.getElementById('perf-status-label');
+        if (statusPill) statusPill.classList.remove('streaming');
+        if (statusLabel) statusLabel.textContent = 'Ready';
         
         if (opts && opts.totalTokens !== undefined) {
           this.tokenCount = opts.totalTokens;
           const tokEl = document.getElementById('perf-stat-tokens');
-          if (tokEl) tokEl.innerText = this.tokenCount + ' tok';
+          if (tokEl) tokEl.innerText = this.tokenCount.toLocaleString();
         }
         if (opts && opts.totalSecs !== undefined) {
           const timeEl = document.getElementById('perf-stat-time');
@@ -1552,11 +1755,12 @@ export class PerfSidebar {
         const sessDevicesEl = document.getElementById('perf-sess-devices');
         if (sessDevicesEl) {
           const activeNodes = this.devices.filter(d => d.workerRole && d.workerRole !== "Idle").length;
-          const displayCount = activeNodes > 0 ? activeNodes : this.devices.length;
+          const displayCount = activeNodes > 0 ? activeNodes : (this.currentDeviceCount || 1);
           sessDevicesEl.innerText = displayCount === 1 ? '1 Device' : `${displayCount} Devices`;
         }
       }
       this.renderLiveChart();
+      this.renderShardFlow(this.lastInstantTps);
     } catch (e) {
       console.warn("perfSidebar.onGenDone failed:", e);
     }

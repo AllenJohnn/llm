@@ -5,7 +5,7 @@ function isEnabled(value) {
 
 export default function handler(_req, res) {
   const configuredMode = process.env.FALLBACKMODE;
-  const body = JSON.stringify({ FALLBACKMODE: configuredMode == null ? true : isEnabled(configuredMode) });
+  const body = JSON.stringify({ FALLBACKMODE: configuredMode == null ? false : isEnabled(configuredMode) });
   const headers = {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
