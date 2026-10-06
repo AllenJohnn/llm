@@ -961,25 +961,29 @@ function readWithIdleTimeout(reader, timeoutMs = 60_000) {
 async function rangeFetch(url, lo, hi, noCache = false) {
   const expectedLen = hi - lo + 1;
   const c = await getWeightCache();
-  const key = cacheKey(url, lo, hi);
-  if (c && !noCache) {
-    try {
-      const hit = await c.match(key);
-      if (hit) {
-        // only trust a complete entry: a tab that died mid-write leaves a short one behind
-        const cl = hit.headers.get("x-webslice-len") || hit.headers.get("content-length");
-        if (cl === String(expectedLen)) { cacheHits += expectedLen; return hit; }
-        c.delete(key).catch(() => {});
-      }
-    } catch {}
-  }
-  const headers = { Range: `bytes=${lo}-${hi}` };
-  if (url.includes("ngrok")) headers["ngrok-skip-browser-warning"] = "1";
+  
   const model = MODELS[ai.model];
   const modelSources = model?.kind === "st"
     ? [model.originalSt, model.st, model.stFallback]
     : [model?.originalGguf, model?.gguf, model?.ggufFallback];
   const urls = [...new Set([url, ...modelSources].filter(Boolean))];
+
+  if (c && !noCache) {
+    for (const u of urls) {
+      const key = cacheKey(u, lo, hi);
+      try {
+        const hit = await c.match(key);
+        if (hit) {
+          // only trust a complete entry: a tab that died mid-write leaves a short one behind
+          const cl = hit.headers.get("x-webslice-len") || hit.headers.get("content-length");
+          if (cl === String(expectedLen)) { cacheHits += expectedLen; return hit; }
+          c.delete(key).catch(() => {});
+        }
+      } catch {}
+    }
+  }
+  const headers = { Range: `bytes=${lo}-${hi}` };
+  if (url.includes("ngrok")) headers["ngrok-skip-browser-warning"] = "1";
   let currentUrl = urls[0] || url;
 
   const maxRetries = 3;
@@ -1020,7 +1024,8 @@ async function rangeFetch(url, lo, hi, noCache = false) {
         try {
           r.clone().arrayBuffer().then((buf) => {
             if (buf.byteLength !== expectedLen) return;
-            return c.put(key, new Response(buf, {
+            const saveKey = cacheKey(url, lo, hi);
+            return c.put(saveKey, new Response(buf, {
               status: 200,
               headers: {
                 "content-type": "application/octet-stream",

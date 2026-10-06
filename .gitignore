@@ -20,3 +20,5 @@ presentation/
 .env.*.local
 !.env.example
 env.json
+
+brain/

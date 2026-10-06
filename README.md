@@ -36,7 +36,7 @@ WebSlice runs large language models across the devices in a room, in their brows
 **Run it locally:**
 
 ```bash
-git clone https://github.com/AllenJohnn/llm && cd llm
+git clone https://github.com/AllenJohnn/llm-groq && cd llm
 npx -y serve -l 8080 .        # any static server works; then open http://localhost:8080/room
 ```
 
@@ -132,7 +132,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [GOVERNANCE.md](GOVERNANCE.md). Bench
   author = {John, Allen},
   title  = {WebSlice: peer-to-peer LLM inference across browser tabs},
   year   = {2026},
-  url    = {https://github.com/AllenJohnn/llm}
+  url    = {https://github.com/AllenJohnn/llm-groq}
 }
 ```
 
@@ -153,23 +153,3 @@ The new modern UI includes a comprehensive dashboard for tracking distributed in
 
 ## Groq Cloud Mode
 Groq Cloud mode is enabled by default and can be switched off in the room. It sends prompts and conversation history to Groq, uses the Groq model shown in the room, and downloads no model weights. The local model picker acts as a mapping to a Groq-hosted model in this mode; it does not run the selected local weights. Turn Groq Cloud off to run local WebGPU inference.
-
-## Dashboard & Telemetry
-The new modern UI includes a comprehensive dashboard for tracking distributed inference:
-- **Playground**: Real-time interaction with the cluster.
-- **Network Topology**: Visual representation of the cluster.
-- **Telemetry**: Live metrics on throughput (tok/s), Time to First Token (TTFT), active peers, and latency.
-- **Dynamic Workload Distribution**: Devices automatically join the mesh and compute their designated layers.
-
-## Groq Cloud Mode
-Groq Cloud mode sends prompts and conversation history to Groq, uses the Groq model shown in the room, and downloads no model weights. Turn it off to run local WebGPU inference.
-
-## Dashboard & Telemetry
-The new modern UI includes a comprehensive dashboard for tracking distributed inference:
-- **Playground**: Real-time interaction with the cluster.
-- **Network Topology**: Visual representation of the cluster.
-- **Telemetry**: Live metrics on throughput (tok/s), Time to First Token (TTFT), active peers, and latency.
-- **Dynamic Workload Distribution**: Devices automatically join the mesh and compute their designated layers.
-
-## Groq Cloud Mode
-Groq Cloud mode sends prompts and conversation history to Groq, uses the Groq model shown in the room, and downloads no model weights. Turn it off to run local WebGPU inference.

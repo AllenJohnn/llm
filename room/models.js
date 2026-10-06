@@ -129,14 +129,16 @@ export async function detectLocalModel(modelKey) {
         if (m.gguf) m.gguf = p;
         if (m.st) m.st = p;
         const dir = p.substring(0, p.lastIndexOf("/") + 1);
-        try {
-          const cfgResp = await fetch(dir + "config.json", { method: "HEAD" });
-          if (cfgResp.ok) m.cfg = dir + "config.json";
-        } catch {}
-        try {
-          const tokResp = await fetch(dir + "tokenizer.json", { method: "HEAD" });
-          if (tokResp.ok) m.tok = dir + "tokenizer.json";
-        } catch {}
+        if (dir !== "/" && dir !== "/models/") {
+          try {
+            const cfgResp = await fetch(dir + "config.json", { method: "HEAD" });
+            if (cfgResp.ok) m.cfg = dir + "config.json";
+          } catch {}
+          try {
+            const tokResp = await fetch(dir + "tokenizer.json", { method: "HEAD" });
+            if (tokResp.ok) m.tok = dir + "tokenizer.json";
+          } catch {}
+        }
         return p;
       }
     } catch {}
